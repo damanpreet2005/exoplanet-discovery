@@ -1,0 +1,21 @@
+{
+  "name": "exoplanet-discovery-gateway",
+  "version": "1.0.0",
+  "description": "API gateway (Node.js + Express) between the React frontend and the Python FastAPI ML inference service.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "jest --runInBand"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "multer": "^2.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  }
+}
