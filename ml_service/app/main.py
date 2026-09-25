@@ -52,7 +52,7 @@ app = FastAPI(
     title="Exoplanet ML Inference Service",
     description=(
         "Independent inference service that loads the existing, immutable "
-        "Random Forest + 1D CNN ensemble (model/hybrid_ensemble_model.pkl) "
+        "Random Forest + 2D CNN ensemble (model/hybrid_ensemble_model.pkl) "
         "and returns weighted-fusion predictions. Not exposed directly to "
         "the browser; called only by the main backend API gateway."
     ),

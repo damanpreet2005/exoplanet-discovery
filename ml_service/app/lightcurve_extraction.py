@@ -484,3 +484,22 @@ def compute_feature_vector(time: np.ndarray, flux: np.ndarray) -> LightCurveExtr
         bls=bls,
         characterisation=characterisation,
     )
+
+
+def suggest_koi_parameters(extraction: LightCurveExtraction) -> dict[str, float]:
+    """Best-effort estimates for the handful of the model's real 17 KOI
+    features that a transit search can meaningfully inform, mapped from the
+    real BLS result -- nothing fabricated, and explicitly NOT the other 12
+    features (koi_score, koi_impact, koi_prad, koi_teq, koi_insol,
+    koi_tce_plnt_num, koi_steff, koi_slogg, koi_srad, ra, dec, koi_kepmag),
+    which are stellar/catalog values a light curve cannot provide. These are
+    suggestions for the user to review on the manual-parameter step, not a
+    substitute feature vector fed into the model directly."""
+    bls = extraction.bls
+    return {
+        "koi_period": bls.period_days,
+        "koi_time0bk": bls.transit_epoch,
+        "koi_duration": bls.duration_hours,
+        "koi_depth": bls.depth_ppm,
+        "koi_model_snr": bls.snr,
+    }

@@ -1,16 +1,53 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ManualParamForm from "../components/ManualParamForm";
 import StateBlock from "../components/StateBlock";
-import { fetchFeatureSchema, submitManualParameters } from "../api/client";
+import StepIndicator from "../components/StepIndicator";
+import { fetchFeatureSchema } from "../api/client";
+import { useAnalysis, STATUS, FINAL_STATUS } from "../context/AnalysisContext";
 
-function pct(value) {
-  return value === null || value === undefined ? "—" : `${(value * 100).toFixed(1)}%`;
-}
+// Only these fields can be legitimately suggested from a light-curve transit
+// search (see ml_service's suggest_koi_parameters) -- everything else is a
+// stellar/catalog value a light curve cannot provide, so it stays manual.
+const SUGGESTABLE_CANONICALS = new Set([
+  "koi_period", "koi_time0bk", "koi_duration", "koi_depth", "koi_model_snr",
+]);
 
 export default function ManualParamsPage() {
+  const { status, result, finalStatus, finalError, submitCombinedPrediction } = useAnalysis();
+  const navigate = useNavigate();
+
   const [schemaState, setSchemaState] = useState({ loading: true, features: [], orderConfigured: false, error: null });
   const [values, setValues] = useState({});
-  const [submitState, setSubmitState] = useState({ status: "idle", result: null, error: null });
+  const [prefilled, setPrefilled] = useState(new Set());
+
+  // Route guard: this step requires a light curve already attached to the
+  // session -- never an independent "just enter parameters" mode.
+  useEffect(() => {
+    if (status !== STATUS.SUCCESS || !result) {
+      navigate("/", { replace: true });
+    }
+  }, [status, result, navigate]);
+
+  // Once both the light-curve result and the schema are available, pre-fill
+  // the subset of fields the transit search can inform. Only runs once
+  // (guarded by `values` being empty) so it never clobbers user edits.
+  useEffect(() => {
+    if (!result || schemaState.loading || schemaState.error) return;
+    setValues((prev) => {
+      if (Object.keys(prev).length > 0) return prev;
+      const next = {};
+      const nowPrefilled = new Set();
+      for (const [canonical, value] of Object.entries(result.suggested_parameters || {})) {
+        if (SUGGESTABLE_CANONICALS.has(canonical)) {
+          next[canonical] = String(value);
+          nowPrefilled.add(canonical);
+        }
+      }
+      setPrefilled(nowPrefilled);
+      return next;
+    });
+  }, [result, schemaState.loading, schemaState.error]);
 
   useEffect(() => {
     let cancelled = false;
@@ -28,8 +65,20 @@ export default function ManualParamsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (finalStatus === FINAL_STATUS.SUCCESS) {
+      navigate("/results");
+    }
+  }, [finalStatus, navigate]);
+
   function handleChange(canonical, rawValue) {
     setValues((prev) => ({ ...prev, [canonical]: rawValue }));
+    setPrefilled((prev) => {
+      if (!prev.has(canonical)) return prev;
+      const next = new Set(prev);
+      next.delete(canonical); // user edited it -- no longer just a suggestion
+      return next;
+    });
   }
 
   const allFilled = schemaState.features.length > 0 &&
@@ -38,31 +87,53 @@ export default function ManualParamsPage() {
   async function handleSubmit(e) {
     e.preventDefault();
     if (!allFilled) return;
-    setSubmitState({ status: "loading", result: null, error: null });
     const payload = {};
     for (const f of schemaState.features) payload[f.canonical] = Number(values[f.canonical]);
-    try {
-      const result = await submitManualParameters(payload);
-      setSubmitState({ status: "success", result, error: null });
-    } catch (err) {
-      setSubmitState({ status: "error", result: null, error: err });
-    }
+    await submitCombinedPrediction(payload);
+  }
+
+  if (status !== STATUS.SUCCESS || !result) {
+    return null; // redirecting
   }
 
   return (
     <div className="fade-in">
+      <StepIndicator current={2} />
       <header className="page-header">
-        <h1 className="page-title">Manual Parameter Entry</h1>
+        <h1 className="page-title">Step 2 — Enter Planet &amp; Stellar Parameters</h1>
         <p className="page-subtitle">
-          Enter the model's input parameters directly. These are mapped internally to the exact
-          feature vector the trained scaler expects, in its trained order.
+          The final prediction combines your uploaded light curve with these 17 model parameters.
+          A few fields have been pre-filled from your light-curve analysis where possible — review
+          and adjust them, then fill in the rest.
         </p>
       </header>
 
+      <div className="attached-banner">✓ Light curve attached — {result.filename}</div>
+
       <div className="panel">
-        {schemaState.loading && (
-          <StateBlock icon="⏳" title="Loading parameter list…" />
-        )}
+        <h3 style={{ marginTop: 0 }}>Light Curve Summary</h3>
+        <dl className="candidate-detail">
+          <div>
+            <dt>BLS period</dt>
+            <dd>{result.diagnostics.bls_period_days.toFixed(4)} days</dd>
+          </div>
+          <div>
+            <dt>Transit depth</dt>
+            <dd>{result.diagnostics.bls_depth_ppm.toFixed(1)} ppm</dd>
+          </div>
+          <div>
+            <dt>Transit duration</dt>
+            <dd>{result.diagnostics.bls_duration_hours.toFixed(2)} hours</dd>
+          </div>
+          <div>
+            <dt>Points used</dt>
+            <dd>{result.diagnostics.n_points_used}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div className="panel">
+        {schemaState.loading && <StateBlock icon="⏳" title="Loading parameter list…" />}
 
         {schemaState.error && (
           <StateBlock
@@ -78,8 +149,14 @@ export default function ManualParamsPage() {
             {!schemaState.orderConfigured && (
               <p style={{ color: "var(--warning)", fontSize: "0.85rem", marginTop: 0 }}>
                 ⚠️ The model's exact trained feature order has not been confirmed in this deployment
-                yet, so submissions here will return a clear configuration error rather than a
-                fabricated prediction until it is.
+                yet, so submitting will return a clear configuration error rather than a fabricated
+                prediction until it is.
+              </p>
+            )}
+            {prefilled.size > 0 && (
+              <p style={{ color: "var(--accent-cyan)", fontSize: "0.8rem", marginTop: 0 }}>
+                Fields marked with a light-curve estimate below are editable — adjust them if you
+                have more precise catalog values.
               </p>
             )}
             <form onSubmit={handleSubmit}>
@@ -87,51 +164,29 @@ export default function ManualParamsPage() {
                 features={schemaState.features}
                 values={values}
                 onChange={handleChange}
-                disabled={submitState.status === "loading"}
+                disabled={finalStatus === FINAL_STATUS.SUBMITTING}
+                prefilled={prefilled}
               />
               <button
                 type="submit"
                 className="btn btn-primary"
                 style={{ marginTop: 24 }}
-                disabled={!allFilled || submitState.status === "loading"}
+                disabled={!allFilled || finalStatus === FINAL_STATUS.SUBMITTING}
               >
-                {submitState.status === "loading" ? "Predicting…" : "Predict"}
+                {finalStatus === FINAL_STATUS.SUBMITTING ? "Running combined prediction…" : "Submit"}
               </button>
             </form>
           </>
         )}
 
-        {submitState.status === "error" && (
+        {finalStatus === FINAL_STATUS.ERROR && (
           <div style={{ marginTop: 24 }}>
             <StateBlock
               variant="error"
               icon="⚠️"
-              title={submitState.error?.code || "Prediction failed"}
-              description={submitState.error?.message}
+              title={finalError?.code || "Prediction failed"}
+              description={finalError?.message}
             />
-          </div>
-        )}
-
-        {submitState.status === "success" && submitState.result && (
-          <div className="summary-row" style={{ marginTop: 24 }}>
-            <div className="summary-tile">
-              <div className="value" style={{ color: submitState.result.prediction === 1 ? "var(--success)" : "var(--text-muted)" }}>
-                {submitState.result.prediction}
-              </div>
-              <div className="label">Predicted class</div>
-            </div>
-            <div className="summary-tile">
-              <div className="value">{pct(submitState.result.weighted_probability)}</div>
-              <div className="label">Weighted probability</div>
-            </div>
-            <div className="summary-tile">
-              <div className="value">{pct(submitState.result.random_forest_probability)}</div>
-              <div className="label">Random Forest</div>
-            </div>
-            <div className="summary-tile">
-              <div className="value">{pct(submitState.result.cnn_probability)}</div>
-              <div className="label">1D CNN</div>
-            </div>
           </div>
         )}
       </div>

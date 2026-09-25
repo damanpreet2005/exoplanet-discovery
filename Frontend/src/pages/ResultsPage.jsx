@@ -1,83 +1,80 @@
-import { Link } from "react-router-dom";
-import StateBlock from "../components/StateBlock";
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import ComingSoonPanel from "../components/ComingSoonPanel";
-import { useAnalysis, STATUS } from "../context/AnalysisContext";
+import StepIndicator from "../components/StepIndicator";
+import { useAnalysis, STATUS, FINAL_STATUS } from "../context/AnalysisContext";
 
 function pct(value) {
   return value === null || value === undefined ? "—" : `${(value * 100).toFixed(1)}%`;
 }
 
 export default function ResultsPage() {
-  const { status, result } = useAnalysis();
+  const { status, result, finalStatus, finalResult, manualParameters } = useAnalysis();
+  const navigate = useNavigate();
 
-  if (status !== STATUS.SUCCESS || !result) {
-    return (
-      <div className="fade-in">
-        <header className="page-header">
-          <h1 className="page-title">Results</h1>
-        </header>
-        <div className="panel">
-          <StateBlock
-            icon="🛰️"
-            title="No analysis yet"
-            description="Upload a light curve to see its prediction here."
-            action={
-              <Link to="/" className="btn btn-primary" style={{ marginTop: 12 }}>
-                Go to Upload
-              </Link>
-            }
-          />
-        </div>
-      </div>
-    );
+  // Route guards: results only exist once BOTH the light curve and the
+  // combined prediction are present -- never an independent CSV-only or
+  // parameters-only result.
+  useEffect(() => {
+    if (status !== STATUS.SUCCESS || !result) {
+      navigate("/", { replace: true });
+    } else if (finalStatus !== FINAL_STATUS.SUCCESS || !finalResult) {
+      navigate("/manual-parameters", { replace: true });
+    }
+  }, [status, result, finalStatus, finalResult, navigate]);
+
+  if (status !== STATUS.SUCCESS || !result || finalStatus !== FINAL_STATUS.SUCCESS || !finalResult) {
+    return null; // redirecting
   }
 
   const { diagnostics, characterisation } = result;
 
   return (
     <div className="fade-in">
+      <StepIndicator current={3} />
       <header className="page-header">
-        <h1 className="page-title">Analysis Result</h1>
-        <p className="page-subtitle">{result.filename}</p>
+        <h1 className="page-title">Step 3 — Prediction Results</h1>
+        <p className="page-subtitle">
+          Combined result from your light curve (<strong>{result.filename}</strong>) and the 17
+          submitted model parameters.
+        </p>
       </header>
 
-      {result.warnings?.length > 0 && (
-        <div className="panel" style={{ borderColor: "rgba(255, 207, 92, 0.4)" }}>
-          {result.warnings.map((w, i) => (
-            <p key={i} style={{ margin: 0, color: "var(--warning)", fontSize: "0.85rem" }}>
-              ⚠️ {w}
-            </p>
-          ))}
-        </div>
-      )}
+      {/* NOTE: result.warnings (from the Page-1 light-curve analysis) is
+          deliberately NOT shown here. It describes the best-effort transit-
+          search reconstruction, not this final prediction -- which comes
+          from the manually-entered/reviewed 17 parameters through the
+          verified feature mapping. The accurate caveat for the handful of
+          light-curve-suggested fields is already shown per-field ("✦
+          estimated") on the parameter page, where it actually applies. */}
 
       <div className="summary-row">
         <div className="summary-tile">
-          <div className={`value`} style={{ color: result.prediction === 1 ? "var(--success)" : "var(--text-muted)" }}>
-            {result.prediction}
+          <div className="value" style={{ color: finalResult.prediction === 1 ? "var(--success)" : "var(--text-muted)" }}>
+            {finalResult.prediction}
           </div>
           <div className="label">Predicted class</div>
         </div>
         <div className="summary-tile">
-          <div className="value">{pct(result.weighted_probability)}</div>
+          <div className="value">{pct(finalResult.weighted_probability)}</div>
           <div className="label">Weighted probability</div>
         </div>
         <div className="summary-tile">
-          <div className="value">{pct(result.random_forest_probability)}</div>
-          <div className="label">Random Forest (w={result.weights.random_forest})</div>
+          <div className="value">{pct(finalResult.random_forest_probability)}</div>
+          <div className="label">Random Forest (w={finalResult.weights.random_forest})</div>
         </div>
         <div className="summary-tile">
-          <div className="value">{pct(result.cnn_probability)}</div>
-          <div className="label">1D CNN (w={result.weights.cnn})</div>
+          <div className="value">{pct(finalResult.cnn_probability)}</div>
+          <div className="label">2D CNN (w={finalResult.weights.cnn})</div>
         </div>
         <div className="summary-tile">
-          <div className="value">{result.cache_hit ? "Hit" : "Computed"}</div>
-          <div className="label">Cache</div>
+          <div className="value">{finalResult.model_version}</div>
+          <div className="label">Model version</div>
         </div>
       </div>
 
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>Transit Search Diagnostics</h3>
+        <h3 style={{ marginTop: 0 }}>Light Curve Diagnostics</h3>
         <dl className="candidate-detail">
           <div>
             <dt>Points used / dropped</dt>
@@ -123,10 +120,6 @@ export default function ResultsPage() {
             <dd>{characterisation.secondary_eclipse_depth_ppm.toFixed(1)} ppm</dd>
           </div>
         </dl>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.78rem", marginTop: 12, marginBottom: 0 }}>
-          An odd/even ratio far from 1.0, or a significant secondary eclipse depth, are classic
-          signs of an eclipsing binary rather than a genuine planet.
-        </p>
       </div>
 
       <div className="panel">
@@ -137,14 +130,14 @@ export default function ResultsPage() {
       <div className="panel">
         <details>
           <summary style={{ cursor: "pointer", color: "var(--text-muted)", fontSize: "0.85rem" }}>
-            17 internal model features (extracted)
+            17 submitted model parameters (exactly what produced this result)
           </summary>
           <table className="feature-table">
             <tbody>
-              {Object.entries(result.extracted_features).map(([key, value]) => (
+              {Object.entries(manualParameters || {}).map(([key, value]) => (
                 <tr key={key}>
                   <th>{key}</th>
-                  <td className="value">{typeof value === "number" ? value.toFixed(4) : value}</td>
+                  <td className="value">{typeof value === "number" ? value : String(value)}</td>
                 </tr>
               ))}
             </tbody>

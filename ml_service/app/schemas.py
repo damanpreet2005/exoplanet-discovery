@@ -114,22 +114,35 @@ class CharacterisationResult(BaseModel):
     )
 
 
-class LightCurvePredictionResponse(BaseModel):
+class LightCurveAnalysisResponse(BaseModel):
+    """Stage-1 light-curve analysis only -- deliberately NOT a prediction.
+
+    The trained model's 17 features (koi_score, koi_period, ...) are real
+    KOI catalog/tabular values, most of which cannot be computed from a
+    light curve at all (stellar/catalog properties like koi_steff, ra, dec).
+    Running the actual scaler/RF/CNN here, on a best-effort light-curve-only
+    substitute vector, would silently misuse the trained model's input
+    space. So this endpoint returns real, computed transit-search
+    diagnostics plus `suggested_parameters` -- best-effort estimates for
+    only the handful of the 17 fields a transit search can meaningfully
+    inform (period, epoch, duration, depth, SNR) -- for the user to review
+    and complete on the manual-parameter step. The actual prediction runs
+    only once, later, from that completed 17-value form (see
+    routers/predict_named.py), through the existing unmodified pipeline.
+    """
     dataset_type: str = "light_curve"
     filename: str
     diagnostics: LightCurveDiagnostics
     extracted_features: dict[str, float]
-    prediction: int
-    weighted_probability: float
-    random_forest_probability: float
-    cnn_probability: float
-    weights: FusionWeights
-    model_version: str
-    request_id: str | None = None
-    cache_hit: bool = False
+    suggested_parameters: dict[str, float] = Field(
+        description="Best-effort estimates for the subset of the 17 model features "
+                     "derivable from a light curve (koi_period, koi_time0bk, "
+                     "koi_duration, koi_depth, koi_model_snr) -- for review, not final."
+    )
     characterisation: CharacterisationResult
     physics_validation: NotImplementedSection
     warnings: list[str] = []
+    request_id: str | None = None
 
 
 class TabularRowResult(BaseModel):

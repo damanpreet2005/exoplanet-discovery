@@ -46,6 +46,7 @@ from app.lightcurve_extraction import (
     LIGHTCURVE_FEATURE_NAMES,
     compute_feature_vector,
     parse_time_flux_csv,
+    suggest_koi_parameters,
 )
 from app.predictor import predict_with_cache
 from app.tabular_extraction import TabularValidationError, parse_tabular_csv
@@ -53,8 +54,8 @@ from app.schemas import (
     CharacterisationResult,
     FEATURE_ORDER,
     FusionWeights,
+    LightCurveAnalysisResponse,
     LightCurveDiagnostics,
-    LightCurvePredictionResponse,
     NotImplementedSection,
     PredictionFeatures,
     TabularPredictionResponse,
@@ -125,10 +126,15 @@ async def predict_csv_endpoint(
 
 async def _handle_light_curve(request: Request, background_tasks: BackgroundTasks,
                                file: UploadFile, raw_bytes: bytes, request_id: str
-                               ) -> LightCurvePredictionResponse:
-    registry = request.app.state.model_registry
+                               ) -> LightCurveAnalysisResponse:
+    """Stage-1 analysis only -- deliberately does NOT call the trained model.
+    See LightCurveAnalysisResponse's docstring for why: the model's real 17
+    features are KOI catalog values, most of which a light curve cannot
+    provide, so running scaler/RF/CNN on a light-curve-only substitute here
+    would silently misuse the trained model. The real prediction happens
+    later, once, from the completed 17-parameter form (routers/
+    predict_named.py) -- see the combined workflow in the frontend."""
     settings = request.app.state.settings
-    cache = request.app.state.cache
 
     def _extract() -> tuple:
         time_arr, flux_arr, n_dropped = parse_time_flux_csv(raw_bytes)
@@ -141,24 +147,15 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
     except LightCurveValidationError as exc:
         raise CsvValidationHTTPError(str(exc)) from exc
 
-    features = PredictionFeatures(**dict(zip(FEATURE_ORDER, extraction.features)))
-
-    start = time_module.perf_counter()
-    response, cache_hit, _ = await predict_with_cache(
-        registry.bundle, cache, features, settings.rf_weight, settings.cnn_weight,
-        settings.model_version,
-    )
-    duration_ms = (time_module.perf_counter() - start) * 1000
-
     background_tasks.add_task(
-        _log_prediction_event, "light_curve", request_id, duration_ms, settings.model_version
+        _log_prediction_event, "light_curve", request_id, 0.0, settings.model_version
     )
     logger.info(
-        "lightcurve_prediction_served",
-        extra={"request_id": request_id, "duration_ms": duration_ms, "model_version": settings.model_version},
+        "lightcurve_analysis_served",
+        extra={"request_id": request_id, "model_version": settings.model_version},
     )
 
-    return LightCurvePredictionResponse(
+    return LightCurveAnalysisResponse(
         filename=file.filename or "lightcurve.csv",
         diagnostics=LightCurveDiagnostics(
             n_points_used=extraction.n_points_used,
@@ -171,14 +168,7 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
             num_transits_observed=extraction.characterisation["num_transits_observed"],
         ),
         extracted_features=dict(zip(LIGHTCURVE_FEATURE_NAMES, extraction.features)),
-        prediction=response.prediction,
-        weighted_probability=response.weighted_probability,
-        random_forest_probability=response.random_forest_probability,
-        cnn_probability=response.cnn_probability,
-        weights=FusionWeights(random_forest=settings.rf_weight, cnn=settings.cnn_weight),
-        model_version=settings.model_version,
-        request_id=request_id,
-        cache_hit=cache_hit,
+        suggested_parameters=suggest_koi_parameters(extraction),
         characterisation=CharacterisationResult(
             bls_period_days=extraction.characterisation["bls_period_days"],
             bls_duration_hours=extraction.characterisation["bls_duration_hours"],
@@ -190,6 +180,7 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
         ),
         physics_validation=PHYSICS_VALIDATION_PLACEHOLDER,
         warnings=[BEST_EFFORT_WARNING],
+        request_id=request_id,
     )
 
 

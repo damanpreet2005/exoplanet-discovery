@@ -574,3 +574,71 @@ a {
     border-bottom: 1px solid var(--border-subtle);
   }
 }
+
+/* ---------- Step indicator (guided 3-step workflow) ---------- */
+
+.step-indicator {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 24px;
+}
+
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.step-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-subtle);
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.step-item.active {
+  color: var(--text-primary);
+}
+
+.step-item.active .step-dot {
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(94, 231, 255, 0.4);
+}
+
+.step-item.done .step-dot {
+  border-color: var(--success);
+  color: var(--success);
+  background: rgba(72, 224, 160, 0.1);
+}
+
+.step-connector {
+  width: 28px;
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 0 4px;
+}
+
+.attached-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(72, 224, 160, 0.1);
+  border: 1px solid rgba(72, 224, 160, 0.35);
+  color: var(--success);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
