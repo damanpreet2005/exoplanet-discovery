@@ -9,8 +9,16 @@ function pct(value) {
 }
 
 export default function ResultsPage() {
-  const { status, result, finalStatus, finalResult, manualParameters } = useAnalysis();
+  const { status, result, finalStatus, finalResult, manualParameters, reset } = useAnalysis();
   const navigate = useNavigate();
+
+  function handleNewPrediction() {
+    // Clears the light curve, manual parameters, and final result (both in
+    // memory and from sessionStorage) so the next visit to Page 1 starts a
+    // genuinely fresh session rather than reusing anything from this one.
+    reset();
+    navigate("/");
+  }
 
   // Route guards: results only exist once BOTH the light curve and the
   // combined prediction are present -- never an independent CSV-only or
@@ -32,12 +40,17 @@ export default function ResultsPage() {
   return (
     <div className="fade-in">
       <StepIndicator current={3} />
-      <header className="page-header">
-        <h1 className="page-title">Step 3 — Prediction Results</h1>
-        <p className="page-subtitle">
-          Combined result from your light curve (<strong>{result.filename}</strong>) and the 17
-          submitted model parameters.
-        </p>
+      <header className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <h1 className="page-title">Step 3 — Prediction Results</h1>
+          <p className="page-subtitle">
+            Combined result from your light curve (<strong>{result.filename}</strong>) and the 17
+            submitted model parameters.
+          </p>
+        </div>
+        <button className="btn btn-ghost" onClick={handleNewPrediction}>
+          ↻ New Prediction
+        </button>
       </header>
 
       {/* NOTE: result.warnings (from the Page-1 light-curve analysis) is
@@ -143,6 +156,12 @@ export default function ResultsPage() {
             </tbody>
           </table>
         </details>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
+        <button className="btn btn-primary" onClick={handleNewPrediction}>
+          ↻ Start a New Prediction
+        </button>
       </div>
     </div>
   );

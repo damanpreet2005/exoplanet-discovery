@@ -33,11 +33,10 @@ services:
       - ml-service
 
   frontend:
-    image: python:3.11-slim
-    working_dir: /srv
-    volumes:
-      - ./Frontend:/srv:ro
-    command: ["python3", "-m", "http.server", "5500"]
+    build:
+      context: ./Frontend
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
     ports:
       - "5500:5500"
     depends_on:
