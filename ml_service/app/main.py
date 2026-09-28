@@ -19,6 +19,7 @@ from app.errors import (
     missing_feature_handler,
     model_unavailable_handler,
     not_found_handler,
+    rf_feature_contract_handler,
     unhandled_exception_handler,
     validation_exception_handler,
 )
@@ -26,6 +27,7 @@ from app.feature_aliases import (
     FeatureOrderNotConfiguredError,
     InvalidFeatureValueError,
     MissingFeatureError,
+    RfFeatureContractError,
 )
 from app.logging_config import configure_logging
 from app.model_loader import ModelRegistry
@@ -75,6 +77,7 @@ app.add_exception_handler(FileTooLargeError, file_too_large_handler)
 app.add_exception_handler(MissingFeatureError, missing_feature_handler)
 app.add_exception_handler(InvalidFeatureValueError, invalid_feature_value_handler)
 app.add_exception_handler(FeatureOrderNotConfiguredError, feature_order_not_configured_handler)
+app.add_exception_handler(RfFeatureContractError, rf_feature_contract_handler)
 app.add_exception_handler(404, not_found_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 

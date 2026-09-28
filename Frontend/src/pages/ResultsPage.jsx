@@ -37,6 +37,21 @@ export default function ResultsPage() {
 
   const { diagnostics, characterisation } = result;
 
+  const STELLAR_DISPLAY = [
+    { canonical: "koi_srad", label: "Stellar Radius", unitSuffix: " R☉" },
+    { canonical: "koi_steff", label: "Effective Temperature", unitSuffix: " K" },
+    { canonical: "koi_slogg", label: "Surface Gravity", unitSuffix: " log10(cm/s²)" },
+    { canonical: "ra", label: "Right Ascension", unitSuffix: "°" },
+    { canonical: "dec", label: "Declination", unitSuffix: "°" },
+    { canonical: "koi_kepmag", label: "Kepler Magnitude", unitSuffix: "" },
+  ];
+  const SOURCE_LABELS = {
+    estimated: "Light curve / BLS",
+    derived: "Derived",
+    catalog: "Astronomical catalog",
+    unavailable: "Unavailable",
+  };
+
   return (
     <div className="fade-in">
       <StepIndicator current={3} />
@@ -85,6 +100,46 @@ export default function ResultsPage() {
           <div className="label">Model version</div>
         </div>
       </div>
+
+      {result.features && (
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Object Information</h3>
+          <dl className="candidate-detail" style={{ marginBottom: 12 }}>
+            <div>
+              <dt>Object ID</dt>
+              <dd>{result.object_id}</dd>
+            </div>
+          </dl>
+          <h4 style={{ marginBottom: 8, fontSize: "0.9rem", color: "var(--text-muted)" }}>Stellar Parameters</h4>
+          <table className="feature-table">
+            <thead>
+              <tr>
+                <th>Parameter</th>
+                <th>Value</th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {STELLAR_DISPLAY.map(({ canonical, label, unitSuffix }) => {
+                const fv = result.features[canonical];
+                return (
+                  <tr key={canonical}>
+                    <th>{label}</th>
+                    <td className="value">
+                      {fv && fv.value !== null && fv.value !== undefined
+                        ? `${typeof fv.value === "number" ? fv.value.toFixed(3).replace(/\.?0+$/, "") : fv.value}${unitSuffix}`
+                        : "Unavailable"}
+                    </td>
+                    <td style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                      {fv ? SOURCE_LABELS[fv.status] || fv.status : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>Light Curve Diagnostics</h3>
@@ -141,18 +196,33 @@ export default function ResultsPage() {
       </div>
 
       <div className="panel">
-        <details>
+        <details open={Boolean(result.features)}>
           <summary style={{ cursor: "pointer", color: "var(--text-muted)", fontSize: "0.85rem" }}>
             17 submitted model parameters (exactly what produced this result)
           </summary>
           <table className="feature-table">
+            <thead>
+              <tr>
+                <th>Parameter</th>
+                <th>Value</th>
+                {result.features && <th>Source</th>}
+              </tr>
+            </thead>
             <tbody>
-              {Object.entries(manualParameters || {}).map(([key, value]) => (
-                <tr key={key}>
-                  <th>{key}</th>
-                  <td className="value">{typeof value === "number" ? value : String(value)}</td>
-                </tr>
-              ))}
+              {Object.entries(manualParameters || {}).map(([key, value]) => {
+                const fv = result.features?.[key];
+                return (
+                  <tr key={key}>
+                    <th>{key}</th>
+                    <td className="value">{typeof value === "number" ? value : String(value)}</td>
+                    {result.features && (
+                      <td style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
+                        {fv ? fv.status : "manual"}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </details>

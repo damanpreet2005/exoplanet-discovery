@@ -31,6 +31,17 @@ class Settings:
     csv_max_rows: int = int(os.getenv("CSV_MAX_ROWS", "1000"))
     csv_max_file_size_bytes: int = int(os.getenv("CSV_MAX_FILE_SIZE_BYTES", str(5 * 1024 * 1024)))
 
+    # NASA Exoplanet Archive TAP (Table Access Protocol) sync endpoint --
+    # the Archive's own supported programmatic interface, no API key
+    # required. Configurable so a different mirror/environment can be
+    # pointed at without a code change.
+    nasa_api_base_url: str = os.getenv(
+        "NASA_API_BASE_URL", "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
+    )
+    nasa_api_timeout_seconds: float = float(os.getenv("NASA_API_TIMEOUT_SECONDS", "8"))
+    nasa_cache_ttl_seconds: int = int(os.getenv("NASA_CACHE_TTL_SECONDS", "3600"))
+    nasa_cache_max_size: int = int(os.getenv("NASA_CACHE_MAX_SIZE", "512"))
+
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
     cors_allow_origins: list[str] = [

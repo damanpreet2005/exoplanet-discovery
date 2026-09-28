@@ -31,17 +31,23 @@ async function fetchWithTimeout(url, options, timeoutMs) {
 }
 
 /**
- * Forwards an uploaded (time, flux) light-curve CSV to the ML service's
- * /predict/csv endpoint and returns its parsed JSON body. Throws a typed
- * error on failure. Nothing besides the file is required or sent -- the ML
- * service derives all 17 model features from the light curve itself.
+ * Forwards an uploaded CSV plus (for a light-curve upload) its required
+ * Object ID to the ML service's /predict/csv endpoint and returns its
+ * parsed JSON body. Throws a typed error on failure. `objectId` is the
+ * KIC/KOI/Kepler-name identifier used to resolve catalog-only stellar
+ * fields the RF's trained features need (the route handler validates it is
+ * present for a light-curve upload before this is ever called; it is
+ * `undefined` for a tabular Kepler-catalog upload, which doesn't use it).
  */
-async function forwardCsvPrediction({ buffer, filename, mimetype, requestId }) {
+async function forwardCsvPrediction({ buffer, filename, mimetype, requestId, objectId }) {
   const maxAttempts = config.mlServiceMaxRetries + 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const form = new FormData();
     form.append("file", new Blob([buffer], { type: mimetype || "text/csv" }), filename);
+    if (objectId !== undefined) {
+      form.append("object_id", objectId);
+    }
 
     let response;
     try {

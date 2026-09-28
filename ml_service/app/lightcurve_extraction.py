@@ -403,6 +403,145 @@ def _transit_residual_scatter_ppm(time, normalized_flux, bls: BlsResult) -> floa
     return float(np.std(normalized_flux[in_transit])) * 1e6
 
 
+@dataclass
+class ImpactEstimate:
+    value: float | None
+    available: bool
+    note: str
+
+
+def estimate_impact_parameter(time: np.ndarray, normalized_flux: np.ndarray, bls: BlsResult) -> ImpactEstimate:
+    """Estimates the transit impact parameter b from the transit *shape*
+    (ingress/egress vs. flat-bottom duration), using the standard circular-
+    orbit, no-limb-darkening relation (Seager & Mallen-Ornelas 2003, also in
+    Winn 2010's transits review):
+
+        b^2 = [ (1 - sqrt(depth))^2 - (T23/T14)^2 * (1 + sqrt(depth))^2 ]
+              / [ 1 - (T23/T14)^2 ]
+
+    where T14 is the total transit duration (first to fourth contact, taken
+    from the BLS box-fit duration) and T23 is the flat-bottom duration
+    (second to third contact).
+
+    Neither T14 nor T23 is trusted directly from the BLS box fit -- BLS fits
+    a flat-topped box to what is really a trapezoid, which tends to hug the
+    flat bottom and can *underestimate* the true first-to-fourth-contact
+    duration whenever ingress/egress make up a sizeable fraction of the
+    transit. Both are instead measured directly from the data: the light
+    curve is phase-folded on the BLS period/epoch, binned within a search
+    window generously wider than the BLS duration (so real ingress/egress
+    wings aren't cut off), and:
+      - T14 (total duration) is the phase width where the binned depth first
+        rises above 10% of the transit's peak (binned) depth,
+      - T23 (flat-bottom duration) is the phase width where it reaches 90%
+        of that peak depth.
+    This requires the transit to actually be resolved by several independent
+    points spanning ingress, the flat bottom, and egress.
+
+    ASSUMPTIONS: circular orbit, no limb darkening (so the transit is
+    trapezoidal, not smoothly curved) -- both standard simplifications for
+    this level of shape analysis, and both explicitly noted as caveats on
+    the returned value.
+
+    BOUNDS: b is only physically meaningful in roughly [0, 1 + Rp/Rstar); the
+    result is clipped to [0, 1.5] when the formula is evaluable, and treated
+    as unavailable (not clipped/invented) if the fit is degenerate.
+
+    FAILURE BEHAVIOR: returns `available=False` (never a fabricated number)
+    when: fewer than 6 points fall in the search window, too few phase bins
+    are populated, the ingress/egress cannot be distinguished from the flat
+    bottom (T23/T14 too close to 1, or T23 isn't strictly shorter than T14),
+    or the algebraic result is non-finite / meaningfully unphysical (b^2 far
+    outside [0, 2.25]).
+    """
+    bls_half_dur_days = (bls.duration_hours / 24.0) / 2.0
+    depth = bls.depth_fraction
+    if not math.isfinite(depth) or depth <= 0:
+        return ImpactEstimate(None, False, "No positive transit depth to fit a shape against.")
+
+    # Generously wide search window: up to 2.5x the BLS box duration (capped
+    # at a quarter of the period so it can never wrap into the next transit),
+    # specifically so an underestimated BLS box doesn't clip real
+    # ingress/egress wings out of the shape fit.
+    search_half_dur_days = min(bls_half_dur_days * 2.5, bls.period_days / 4.0)
+
+    phase_days = _phase(time, bls.period_days, bls.transit_epoch) * bls.period_days
+    in_transit_mask = np.abs(phase_days) < search_half_dur_days
+    n_in_transit = int(in_transit_mask.sum())
+    if n_in_transit < 6:
+        return ImpactEstimate(
+            None, False,
+            f"Only {n_in_transit} points fall within the transit search window; at least 6 are "
+            "needed to resolve ingress/egress shape.",
+        )
+
+    order = np.argsort(phase_days[in_transit_mask])
+    ph = phase_days[in_transit_mask][order]
+    fl = normalized_flux[in_transit_mask][order]
+
+    n_bins = min(30, max(8, n_in_transit // 3))
+    bin_edges = np.linspace(-search_half_dur_days, search_half_dur_days, n_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    bin_means = np.full(n_bins, np.nan)
+    for i in range(n_bins):
+        sel = (ph >= bin_edges[i]) & (ph < bin_edges[i + 1])
+        if sel.sum() > 0:
+            bin_means[i] = float(np.mean(fl[sel]))
+    valid = np.isfinite(bin_means)
+    if valid.sum() < 5:
+        return ImpactEstimate(None, False, "Too few populated phase bins to resolve transit shape.")
+
+    bin_depth = 1.0 - bin_means[valid]
+    valid_centers = bin_centers[valid]
+    peak_depth = float(np.max(bin_depth))
+    if peak_depth <= 0:
+        return ImpactEstimate(None, False, "No phase bin showed any measurable flux drop.")
+
+    touches_transit = bin_depth >= 0.1 * peak_depth   # first/fourth contact (T14)
+    saturated = bin_depth >= 0.9 * peak_depth          # second/third contact -- flat bottom (T23)
+    if touches_transit.sum() < 2:
+        return ImpactEstimate(None, False, "No phase bins clearly show the transit above the noise floor.")
+    if saturated.sum() < 2:
+        return ImpactEstimate(
+            None, False,
+            "No phase bins reach the flat-bottom depth threshold; transit shape (or SNR) does "
+            "not resolve a distinct flat bottom from the ingress/egress slopes.",
+        )
+
+    t14_phases = valid_centers[touches_transit]
+    t23_phases = valid_centers[saturated]
+    t14_days = float(t14_phases.max() - t14_phases.min())
+    t23_days = float(t23_phases.max() - t23_phases.min())
+    if t14_days <= 0 or t23_days <= 0 or t23_days >= t14_days:
+        return ImpactEstimate(
+            None, False,
+            "Flat-bottom duration could not be resolved as strictly shorter than the total "
+            "transit duration -- the ingress/egress slope is not distinguishable at this SNR/cadence.",
+        )
+
+    ratio = t23_days / t14_days
+    sqrt_depth = math.sqrt(depth)
+    numerator = (1 - sqrt_depth) ** 2 - (ratio ** 2) * (1 + sqrt_depth) ** 2
+    denominator = 1 - ratio ** 2
+    if denominator <= 1e-6:
+        return ImpactEstimate(None, False, "Degenerate ingress/egress ratio (T23/T14 too close to 1).")
+
+    b_squared = numerator / denominator
+    if not math.isfinite(b_squared) or b_squared < -0.25 or b_squared > 2.25:
+        return ImpactEstimate(
+            None, False,
+            f"Shape-derived impact parameter is unphysical (b^2={b_squared:.3f}); not reliable enough to report.",
+        )
+
+    b = math.sqrt(max(b_squared, 0.0))
+    b = min(b, 1.5)
+    return ImpactEstimate(
+        b, True,
+        "Estimated from the ratio of flat-bottom to total transit duration (circular orbit, "
+        "no limb darkening assumed); treat as approximate.",
+    )
+
+
 def _skewness(x: np.ndarray) -> float:
     centered = x - np.mean(x)
     std = np.std(x)

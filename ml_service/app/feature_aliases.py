@@ -275,3 +275,48 @@ def looks_like_tabular_kepler_header(header: list[str]) -> bool:
     normalized = {normalize_key(h) for h in header}
     matches = sum(1 for h in normalized if h in ALIAS_TO_CANONICAL)
     return matches >= _MIN_TABULAR_COLUMN_MATCHES
+
+
+class RfFeatureContractError(Exception):
+    """Raised only for a genuine internal-consistency bug (accidental
+    feature reordering, a wrong vector length, or a non-finite value
+    reaching this point) -- never for ordinary "identifier not found" or
+    "catalog field missing" cases, which are handled earlier and never
+    reach RF-vector construction at all (see app/feature_engine.py:
+    `ready_for_prediction` is only true once every one of the 17 features
+    already has a real value)."""
+
+
+def assert_valid_rf_feature_vector(ordered_names: list[str], ordered_values: list[float],
+                                     random_forest=None) -> None:
+    """Explicit, defense-in-depth check that the vector about to be fed to
+    the trained Random Forest is exactly 17 finite values in exactly
+    MODEL_FEATURE_ORDER -- so an accidental future reordering/renaming is
+    caught here rather than silently producing a wrong prediction.
+
+    Also cross-checks against the model artifact's own `feature_names_in_`
+    when the artifact actually carries one (see schemas.py's provenance
+    note: as of this writing, both the stored RandomForestClassifier and
+    RobustScaler were fit on a plain numpy array, so `feature_names_in_` is
+    None on both and this half of the check is a no-op today -- it's kept
+    so the check strengthens automatically if a future model artifact ever
+    does carry real feature names, without any other code needing to change.
+    """
+    if ordered_names != MODEL_FEATURE_ORDER:
+        raise RfFeatureContractError(
+            f"RF feature name/order mismatch: expected {MODEL_FEATURE_ORDER}, got {ordered_names}."
+        )
+    if len(ordered_values) != len(MODEL_FEATURE_ORDER):
+        raise RfFeatureContractError(
+            f"RF feature vector has {len(ordered_values)} values; expected exactly {len(MODEL_FEATURE_ORDER)}."
+        )
+    for name, value in zip(ordered_names, ordered_values):
+        if value is None or not math.isfinite(value):
+            raise RfFeatureContractError(f"RF feature '{name}' is missing or non-finite ({value!r}).")
+
+    artifact_feature_names = getattr(random_forest, "feature_names_in_", None)
+    if artifact_feature_names is not None and list(artifact_feature_names) != MODEL_FEATURE_ORDER:
+        raise RfFeatureContractError(
+            "RF feature order does not match the trained model artifact's own feature_names_in_: "
+            f"artifact expects {list(artifact_feature_names)}, got {MODEL_FEATURE_ORDER}."
+        )

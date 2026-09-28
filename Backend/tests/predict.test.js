@@ -26,14 +26,30 @@ const FAKE_ML_RESPONSE = {
 };
 
 const LIGHT_CURVE_CSV = Buffer.from("time,flux\n0,1.0\n0.1,0.99\n0.2,1.0\n");
+const TABULAR_KEPLER_CSV = Buffer.from(
+  "koi_period,koi_duration,koi_depth\n9.488035570,2.9575,615.8\n"
+);
 
 afterEach(() => jest.clearAllMocks());
 
-test("valid light curve CSV alone is forwarded to the ML service and result returned", async () => {
+test("a tabular Kepler-catalog CSV (not a light curve) does not require an Object ID", async () => {
+  mlClient.forwardCsvPrediction.mockResolvedValue({ dataset_type: "tabular_kepler", results: [] });
+
+  const res = await request(app)
+    .post("/api/v1/predict")
+    .attach("file", TABULAR_KEPLER_CSV, { filename: "tabular.csv", contentType: "text/csv" });
+
+  expect(res.status).toBe(200);
+  const callArgs = mlClient.forwardCsvPrediction.mock.calls[0][0];
+  expect(callArgs.objectId).toBeUndefined();
+});
+
+test("valid light curve CSV with a valid Object ID is forwarded to the ML service and result returned", async () => {
   mlClient.forwardCsvPrediction.mockResolvedValue({ ...FAKE_ML_RESPONSE });
 
   const res = await request(app)
     .post("/api/v1/predict")
+    .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
 
   expect(res.status).toBe(200);
@@ -41,11 +57,55 @@ test("valid light curve CSV alone is forwarded to the ML service and result retu
   expect(res.body.prediction).toBe(1);
   expect(res.body.request_id).toBeDefined();
   expect(mlClient.forwardCsvPrediction).toHaveBeenCalledWith(
-    expect.objectContaining({ filename: "lightcurve.csv" })
+    expect.objectContaining({ filename: "lightcurve.csv", objectId: "KIC 11904151" })
   );
-  // Nothing besides the file is forwarded.
+  // Nothing besides the file and objectId is forwarded.
   const callArgs = mlClient.forwardCsvPrediction.mock.calls[0][0];
   expect(callArgs.stellarParams).toBeUndefined();
+});
+
+test("Object ID is trimmed before being forwarded", async () => {
+  mlClient.forwardCsvPrediction.mockResolvedValue({ ...FAKE_ML_RESPONSE });
+
+  await request(app)
+    .post("/api/v1/predict")
+    .field("object_id", "  KIC 11904151  ")
+    .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
+
+  expect(mlClient.forwardCsvPrediction).toHaveBeenCalledWith(
+    expect.objectContaining({ objectId: "KIC 11904151" })
+  );
+});
+
+test("missing Object ID is rejected with 422 without calling the ML service", async () => {
+  const res = await request(app)
+    .post("/api/v1/predict")
+    .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
+
+  expect(res.status).toBe(422);
+  expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  expect(res.body.error.message).toMatch(/Object ID/);
+  expect(mlClient.forwardCsvPrediction).not.toHaveBeenCalled();
+});
+
+test("blank Object ID is rejected with 422 without calling the ML service", async () => {
+  const res = await request(app)
+    .post("/api/v1/predict")
+    .field("object_id", "   ")
+    .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
+
+  expect(res.status).toBe(422);
+  expect(mlClient.forwardCsvPrediction).not.toHaveBeenCalled();
+});
+
+test("overly long Object ID is rejected with 422 without calling the ML service", async () => {
+  const res = await request(app)
+    .post("/api/v1/predict")
+    .field("object_id", "x".repeat(65))
+    .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
+
+  expect(res.status).toBe(422);
+  expect(mlClient.forwardCsvPrediction).not.toHaveBeenCalled();
 });
 
 test("request ID is generated and passed through to the ML client", async () => {
@@ -54,6 +114,7 @@ test("request ID is generated and passed through to the ML client", async () => 
   const res = await request(app)
     .post("/api/v1/predict")
     .set("X-Request-Id", "trace-99")
+    .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
 
   expect(res.headers["x-request-id"]).toBe("trace-99");
@@ -82,6 +143,7 @@ test("ML service unavailable returns 503", async () => {
   mlClient.forwardCsvPrediction.mockRejectedValue(new MLServiceUnavailableError());
   const res = await request(app)
     .post("/api/v1/predict")
+    .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
   expect(res.status).toBe(503);
   expect(res.body.error.code).toBe("ML_SERVICE_UNAVAILABLE");
@@ -91,6 +153,7 @@ test("ML service timeout returns 504", async () => {
   mlClient.forwardCsvPrediction.mockRejectedValue(new MLServiceTimeoutError());
   const res = await request(app)
     .post("/api/v1/predict")
+    .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
   expect(res.status).toBe(504);
   expect(res.body.error.code).toBe("ML_SERVICE_TIMEOUT");
@@ -102,6 +165,7 @@ test("ML service validation rejection is passed through as 422", async () => {
   );
   const res = await request(app)
     .post("/api/v1/predict")
+    .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
   expect(res.status).toBe(422);
   expect(res.body.error.code).toBe("CSV_VALIDATION_ERROR");
@@ -114,6 +178,7 @@ test("unexpected error returns structured 500 without leaking internals", async 
   );
   const res = await request(app)
     .post("/api/v1/predict")
+    .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
   expect(res.status).toBe(500);
   expect(res.body.error.code).toBe("INTERNAL_ERROR");

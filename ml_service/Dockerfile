@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY data ./data
 
 # The model file is mounted from the repo's single authoritative model/
 # directory (see docker-compose.yml) rather than copied into the image, so

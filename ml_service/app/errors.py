@@ -103,6 +103,24 @@ async def feature_order_not_configured_handler(request: Request, exc: "FeatureOr
     )
 
 
+async def rf_feature_contract_handler(request: Request, exc: "RfFeatureContractError"):
+    """This is never a user-input problem -- app/feature_engine.py only ever
+    calls the RF once `ready_for_prediction` is true (all 17 real values
+    resolved), so reaching this handler means the vector about to be fed to
+    the trained model failed its own internal name/order/finiteness
+    contract check (app/feature_aliases.assert_valid_rf_feature_vector).
+    Treated as a controlled internal error, never a silently-wrong
+    prediction."""
+    logger.error("rf_feature_contract_violation", extra={"endpoint": str(request.url.path), "detail": str(exc)})
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content=structured_error(
+            "RF_FEATURE_UNAVAILABLE",
+            "Unable to construct the required RF feature vector. The prediction was not run.",
+        ),
+    )
+
+
 async def not_found_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,

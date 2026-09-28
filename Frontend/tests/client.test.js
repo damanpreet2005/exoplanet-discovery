@@ -13,7 +13,8 @@ class FakeXHR {
   setRequestHeader(key, value) {
     this.requestHeaders[key] = value;
   }
-  send() {
+  send(body) {
+    this.sentBody = body;
     FakeXHR.instances.push(this);
   }
 }
@@ -68,6 +69,32 @@ describe("uploadCsvForAnalysis", () => {
       code: "NETWORK_ERROR",
       message: "Could not reach the backend. Is it running?",
     });
+  });
+
+  test("object_id is included in the form data when supplied", async () => {
+    const file = new File(["a,b\n1,2"], "test.csv", { type: "text/csv" });
+    const promise = uploadCsvForAnalysis(file, { objectId: "K00752.01" });
+
+    const xhr = FakeXHR.instances[0];
+    expect(xhr.sentBody.get("object_id")).toBe("K00752.01");
+
+    xhr.status = 200;
+    xhr.responseText = JSON.stringify({});
+    xhr.onload();
+    await promise;
+  });
+
+  test("object_id is still sent as an empty string when not supplied (required field, backend validates)", async () => {
+    const file = new File(["a,b\n1,2"], "test.csv", { type: "text/csv" });
+    const promise = uploadCsvForAnalysis(file);
+
+    const xhr = FakeXHR.instances[0];
+    expect(xhr.sentBody.get("object_id")).toBe("");
+
+    xhr.status = 200;
+    xhr.responseText = JSON.stringify({});
+    xhr.onload();
+    await promise;
   });
 
   test("reports upload progress via onProgress callback", async () => {

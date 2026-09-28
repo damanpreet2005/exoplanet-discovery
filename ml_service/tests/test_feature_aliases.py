@@ -6,6 +6,8 @@ from app.feature_aliases import (
     FeatureOrderNotConfiguredError,
     InvalidFeatureValueError,
     MissingFeatureError,
+    RfFeatureContractError,
+    assert_valid_rf_feature_vector,
     extract_feature_vector,
     resolve_canonical_fields,
 )
@@ -130,3 +132,64 @@ class TestExtractFeatureVector:
         assert values[0] == 1.0  # koi_score
         assert values[1] == 9.488  # koi_period
         assert values[-1] == 15.347  # koi_kepmag
+
+
+class TestAssertValidRfFeatureVector:
+    """STEP 9: an explicit assertion so an accidental future reordering,
+    renaming, or missing/non-finite value is caught before it ever reaches
+    the trained model, rather than silently producing a wrong prediction."""
+
+    def _valid_values(self):
+        return [float(i) for i in range(1, 18)]  # 17 finite values
+
+    def test_correct_order_and_values_pass(self):
+        assert_valid_rf_feature_vector(list(MODEL_FEATURE_ORDER), self._valid_values())
+
+    def test_reordered_names_raise(self):
+        reordered = list(MODEL_FEATURE_ORDER)
+        reordered[0], reordered[1] = reordered[1], reordered[0]
+        with pytest.raises(RfFeatureContractError):
+            assert_valid_rf_feature_vector(reordered, self._valid_values())
+
+    def test_renamed_feature_raises(self):
+        renamed = list(MODEL_FEATURE_ORDER)
+        renamed[-1] = "koi_kepmag_v2"
+        with pytest.raises(RfFeatureContractError):
+            assert_valid_rf_feature_vector(renamed, self._valid_values())
+
+    def test_wrong_length_raises(self):
+        with pytest.raises(RfFeatureContractError):
+            assert_valid_rf_feature_vector(list(MODEL_FEATURE_ORDER), self._valid_values()[:16])
+
+    def test_none_value_raises(self):
+        values = self._valid_values()
+        values[3] = None
+        with pytest.raises(RfFeatureContractError):
+            assert_valid_rf_feature_vector(list(MODEL_FEATURE_ORDER), values)
+
+    def test_non_finite_value_raises(self):
+        values = self._valid_values()
+        values[3] = float("nan")
+        with pytest.raises(RfFeatureContractError):
+            assert_valid_rf_feature_vector(list(MODEL_FEATURE_ORDER), values)
+
+    def test_matches_model_artifact_feature_names_when_present(self):
+        class FakeModel:
+            feature_names_in_ = list(MODEL_FEATURE_ORDER)
+
+        assert_valid_rf_feature_vector(list(MODEL_FEATURE_ORDER), self._valid_values(), random_forest=FakeModel())
+
+    def test_mismatched_model_artifact_feature_names_raise(self):
+        class FakeModel:
+            feature_names_in_ = ["some", "other", "order"]
+
+        with pytest.raises(RfFeatureContractError):
+            assert_valid_rf_feature_vector(list(MODEL_FEATURE_ORDER), self._valid_values(), random_forest=FakeModel())
+
+    def test_no_artifact_metadata_is_not_an_error(self):
+        # Reflects today's real artifact: feature_names_in_ is None on both
+        # the stored RandomForestClassifier and RobustScaler.
+        class FakeModel:
+            feature_names_in_ = None
+
+        assert_valid_rf_feature_vector(list(MODEL_FEATURE_ORDER), self._valid_values(), random_forest=FakeModel())

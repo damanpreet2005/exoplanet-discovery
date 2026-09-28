@@ -114,21 +114,66 @@ class CharacterisationResult(BaseModel):
     )
 
 
+class FeatureValueModel(BaseModel):
+    """One of the model's 17 real KOI features, fully attributed: what the
+    value is, where it came from, and whether it's a light-curve estimate,
+    a formula-derived quantity, a catalog lookup, or genuinely unavailable.
+    See app/feature_engine.py for how each of the 17 is produced."""
+    value: float | None
+    unit: str
+    source: str
+    status: str = Field(description="'estimated' | 'derived' | 'catalog' | 'unavailable'")
+    note: str
+
+
+class PredictionResponse(BaseModel):
+    prediction: int = Field(description="Predicted class label (0 or 1). Class semantics "
+                                         "(e.g. which label means 'candidate') are not "
+                                         "recorded in the stored model artifacts.")
+    weighted_probability: float
+    random_forest_probability: float
+    cnn_probability: float
+    weights: FusionWeights
+    model_version: str
+    request_id: str | None = None
+    cache_hit: bool = False
+
+
+class CatalogResolutionModel(BaseModel):
+    requested_identifier: str | None
+    identifier_type: str = Field(
+        description="'kic' | 'koi_name' | 'kepler_name' | 'tic' | 'unrecognized' | 'none'"
+    )
+    match_status: str = Field(
+        description="'not_provided' | 'not_found' | 'unsupported_identifier_type' | 'lookup_error' | "
+                    "'matched_koi' | 'matched_star'"
+    )
+    matched_kepid: int | None = None
+    matched_kepoi_name: str | None = None
+    matched_kepler_name: str | None = None
+    n_candidate_rows: int = 0
+    note: str = ""
+
+
 class LightCurveAnalysisResponse(BaseModel):
-    """Stage-1 light-curve analysis only -- deliberately NOT a prediction.
+    """Light-curve analysis, automatic 17-feature extraction, and -- only
+    when every one of the 17 model features could legitimately be resolved
+    -- the actual trained-model prediction, from a CSV upload plus the
+    required Object ID.
 
     The trained model's 17 features (koi_score, koi_period, ...) are real
-    KOI catalog/tabular values, most of which cannot be computed from a
-    light curve at all (stellar/catalog properties like koi_steff, ra, dec).
-    Running the actual scaler/RF/CNN here, on a best-effort light-curve-only
-    substitute vector, would silently misuse the trained model's input
-    space. So this endpoint returns real, computed transit-search
-    diagnostics plus `suggested_parameters` -- best-effort estimates for
-    only the handful of the 17 fields a transit search can meaningfully
-    inform (period, epoch, duration, depth, SNR) -- for the user to review
-    and complete on the manual-parameter step. The actual prediction runs
-    only once, later, from that completed 17-value form (see
-    routers/predict_named.py), through the existing unmodified pipeline.
+    KOI catalog/tabular values; a light curve alone can only ever supply
+    some of them (see `features` below for exactly which, and why, on this
+    request). Running the actual scaler/RF/CNN on a partially-guessed
+    vector would silently misuse the trained model's input space, so this
+    endpoint only ever calls the model when `ready_for_prediction` is true.
+    Otherwise `prediction` stays null and `missing_features` lists exactly
+    what's needed -- for the user to complete on the (now much shorter)
+    manual-parameter step, see routers/predict_named.py, unchanged.
+
+    `extracted_features` and `suggested_parameters` are preserved from the
+    original light-curve-only analysis for backward compatibility; `features`
+    is the new, fully-attributed report covering all 17 real model inputs.
     """
     dataset_type: str = "light_curve"
     filename: str
@@ -143,6 +188,28 @@ class LightCurveAnalysisResponse(BaseModel):
     physics_validation: NotImplementedSection
     warnings: list[str] = []
     request_id: str | None = None
+
+    object_id: str = Field(
+        description="The required astronomical catalog Object ID (KIC/KOI/Kepler name) supplied with the upload, echoed back."
+    )
+    features: dict[str, FeatureValueModel] = Field(
+        default_factory=dict,
+        description="All 17 real model features (see app/feature_aliases.MODEL_FEATURE_ORDER), "
+                     "each fully attributed with value/unit/source/status/note.",
+    )
+    catalog_resolution: CatalogResolutionModel | None = Field(
+        default=None, description="What the Object ID resolved to in the live NASA Exoplanet Archive lookup."
+    )
+    missing_features: list[str] = Field(
+        default_factory=list,
+        description="Canonical names of the 17 features that remain unavailable on this request.",
+    )
+    ready_for_prediction: bool = Field(
+        default=False, description="True only when all 17 features were resolved and `prediction` was run."
+    )
+    prediction: PredictionResponse | None = Field(
+        default=None, description="The actual trained-model prediction, present only when ready_for_prediction is true.",
+    )
 
 
 class TabularRowResult(BaseModel):
@@ -166,16 +233,3 @@ class TabularPredictionResponse(BaseModel):
     model_version: str
     request_id: str | None = None
     results: list[TabularRowResult]
-
-
-class PredictionResponse(BaseModel):
-    prediction: int = Field(description="Predicted class label (0 or 1). Class semantics "
-                                         "(e.g. which label means 'candidate') are not "
-                                         "recorded in the stored model artifacts.")
-    weighted_probability: float
-    random_forest_probability: float
-    cnn_probability: float
-    weights: FusionWeights
-    model_version: str
-    request_id: str | None = None
-    cache_hit: bool = False

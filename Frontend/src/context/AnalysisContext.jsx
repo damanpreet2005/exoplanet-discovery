@@ -74,7 +74,7 @@ export function AnalysisProvider({ children }) {
   const [finalResult, setFinalResult] = useState(persisted.finalResult || null);
   const [finalError, setFinalError] = useState(null);
 
-  const analyze = useCallback(async (file) => {
+  const analyze = useCallback(async (file, objectId) => {
     setStatus(STATUS.UPLOADING);
     setProgress(0);
     setError(null);
@@ -92,6 +92,7 @@ export function AnalysisProvider({ children }) {
 
     try {
       const body = await uploadCsvForAnalysis(file, {
+        objectId,
         onProgress: (pct) => {
           setProgress(pct);
           if (pct >= 100) setStatus(STATUS.ANALYZING);
@@ -121,6 +122,20 @@ export function AnalysisProvider({ children }) {
     }
   }, []);
 
+  /**
+   * Used only when the CSV-upload response already reached
+   * ready_for_prediction with a real trained-model `prediction` attached
+   * (every one of the 17 features resolved automatically) -- records that
+   * result directly instead of re-submitting the same 17 values to
+   * POST /predict/manual as a redundant second network call.
+   */
+  const acceptExtractedPrediction = useCallback((values, predictionBody) => {
+    setManualParameters(values);
+    setFinalResult(predictionBody);
+    setFinalStatus(FINAL_STATUS.SUCCESS);
+    persistSession({ manualParameters: values, finalResult: predictionBody });
+  }, []);
+
   const reset = useCallback(() => {
     setStatus(STATUS.EMPTY);
     setProgress(0);
@@ -139,6 +154,7 @@ export function AnalysisProvider({ children }) {
       value={{
         status, progress, result, error, filename, analyze, reset,
         manualParameters, finalStatus, finalResult, finalError, submitCombinedPrediction,
+        acceptExtractedPrediction,
       }}
     >
       {children}

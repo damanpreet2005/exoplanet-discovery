@@ -26,4 +26,25 @@ describe("App shell", () => {
     fireEvent.click(paramsLink);
     expect(await screen.findByRole("heading", { name: /Step 1.*Upload Light Curve/i })).toBeInTheDocument();
   });
+
+  test("the Object ID field on Upload is present, required, and empty by default", () => {
+    render(<App />);
+    const input = screen.getByPlaceholderText(/KIC 11904151/i);
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveValue("");
+    expect(input).toBeRequired();
+    expect(screen.getByText(/^Object ID/i)).toBeInTheDocument();
+  });
+
+  test("dropping a CSV without an Object ID shows a validation error instead of uploading", async () => {
+    render(<App />);
+    const dropzoneInput = document.querySelector('input[type="file"]');
+    const file = new File(["time,flux\n0,1.0\n"], "lightcurve.csv", { type: "text/csv" });
+
+    fireEvent.change(dropzoneInput, { target: { files: [file] } });
+
+    expect(await screen.findByText(/Object ID is required/i)).toBeInTheDocument();
+    // Still on Step 1 -- no upload/analysis was attempted.
+    expect(screen.getByRole("heading", { name: /Step 1.*Upload Light Curve/i })).toBeInTheDocument();
+  });
 });

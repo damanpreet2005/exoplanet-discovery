@@ -14,8 +14,14 @@ function generateRequestId() {
  * POST /api/v1/predict, via XMLHttpRequest (rather than fetch) specifically
  * so we get real upload-progress events to drive the progress bar -- not a
  * simulated/fake progress animation.
+ *
+ * `objectId` is the required astronomical catalog Object ID (e.g.
+ * "KIC 11904151", "K00752.01", or "Kepler-227 b") for the star/object this
+ * light curve belongs to -- the RF's trained features include catalog-only
+ * stellar fields a light curve alone cannot supply, so this is required
+ * alongside the CSV, not an optional extra.
  */
-export function uploadCsvForAnalysis(file, { onProgress } = {}) {
+export function uploadCsvForAnalysis(file, { onProgress, objectId } = {}) {
   const requestId = generateRequestId();
 
   return new Promise((resolve, reject) => {
@@ -50,6 +56,7 @@ export function uploadCsvForAnalysis(file, { onProgress } = {}) {
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("object_id", (objectId || "").trim());
     xhr.send(formData);
   });
 }

@@ -25,7 +25,7 @@ import csv
 import logging
 import time as time_module
 
-from fastapi import APIRouter, BackgroundTasks, File, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 
 from app.errors import (
     CsvValidationHTTPError,
@@ -36,23 +36,28 @@ from app.feature_aliases import (
     MODEL_FEATURE_ORDER,
     InvalidFeatureValueError,
     MissingFeatureError,
+    RfFeatureContractError,
+    assert_valid_rf_feature_vector,
     extract_feature_vector,
     looks_like_light_curve_header,
     looks_like_tabular_kepler_header,
 )
+from app.feature_engine import extract_features
+from app.stellar_catalog_service import MAX_OBJECT_ID_LENGTH
 from app.lightcurve_extraction import (
     BEST_EFFORT_WARNING,
     LightCurveValidationError,
     LIGHTCURVE_FEATURE_NAMES,
-    compute_feature_vector,
     parse_time_flux_csv,
     suggest_koi_parameters,
 )
 from app.predictor import predict_with_cache
 from app.tabular_extraction import TabularValidationError, parse_tabular_csv
 from app.schemas import (
+    CatalogResolutionModel,
     CharacterisationResult,
     FEATURE_ORDER,
+    FeatureValueModel,
     FusionWeights,
     LightCurveAnalysisResponse,
     LightCurveDiagnostics,
@@ -91,11 +96,40 @@ def _peek_header(raw_bytes: bytes) -> list[str]:
     return next(csv.reader([first_line]))
 
 
+def _validate_object_id_for_light_curve(object_id: str | None) -> str:
+    """The RF's 17 trained features genuinely include catalog-only fields
+    (koi_steff, koi_slogg, koi_srad, ra, dec, koi_kepmag, koi_score) that a
+    light curve alone cannot supply -- see app/feature_engine.py's
+    classification. Because of that, Object ID is a required field for the
+    light-curve upload path, not an optional extra. This raises a clear,
+    specific validation error rather than relying on FastAPI's generic
+    "missing field" message. (The tabular Kepler-catalog CSV path is
+    unaffected -- those rows already carry their own koi_* columns.)"""
+    if object_id is None or not object_id.strip():
+        raise CsvValidationHTTPError(
+            "Object ID is required: enter the astronomical catalog identifier (e.g. 'KIC 11904151') "
+            "for the star/object this light curve belongs to, alongside the CSV upload."
+        )
+    if not isinstance(object_id, str):
+        raise CsvValidationHTTPError("Object ID must be a string.")
+    if len(object_id.strip()) > MAX_OBJECT_ID_LENGTH:
+        raise CsvValidationHTTPError(f"Object ID must be at most {MAX_OBJECT_ID_LENGTH} characters.")
+    return object_id.strip()
+
+
 @router.post("/predict/csv")
 async def predict_csv_endpoint(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Either a light-curve CSV (time, flux) or a tabular Kepler CSV (koi_* columns)"),
+    object_id: str | None = Form(
+        None,
+        description="Required for a light-curve upload: the KIC ID / KOI name / Kepler planet "
+                     "name for the star/object this light curve belongs to, used to resolve "
+                     "catalog-only stellar fields (koi_steff, koi_slogg, koi_srad, ra, dec, "
+                     "koi_kepmag, koi_score) from the live NASA Exoplanet Archive. Not used for a "
+                     "tabular Kepler-catalog CSV upload, which already carries its own koi_* columns.",
+    ),
 ):
     registry = request.app.state.model_registry
     settings = request.app.state.settings
@@ -113,7 +147,8 @@ async def predict_csv_endpoint(
     header = _peek_header(raw_bytes)
 
     if looks_like_light_curve_header(header):
-        return await _handle_light_curve(request, background_tasks, file, raw_bytes, request_id)
+        validated_object_id = _validate_object_id_for_light_curve(object_id)
+        return await _handle_light_curve(request, background_tasks, file, raw_bytes, request_id, validated_object_id)
     if looks_like_tabular_kepler_header(header):
         return await _handle_tabular(request, background_tasks, file, raw_bytes, request_id)
 
@@ -125,35 +160,85 @@ async def predict_csv_endpoint(
 
 
 async def _handle_light_curve(request: Request, background_tasks: BackgroundTasks,
-                               file: UploadFile, raw_bytes: bytes, request_id: str
+                               file: UploadFile, raw_bytes: bytes, request_id: str,
+                               object_id: str,
                                ) -> LightCurveAnalysisResponse:
-    """Stage-1 analysis only -- deliberately does NOT call the trained model.
-    See LightCurveAnalysisResponse's docstring for why: the model's real 17
-    features are KOI catalog values, most of which a light curve cannot
-    provide, so running scaler/RF/CNN on a light-curve-only substitute here
-    would silently misuse the trained model. The real prediction happens
-    later, once, from the completed 17-parameter form (routers/
-    predict_named.py) -- see the combined workflow in the frontend."""
-    settings = request.app.state.settings
+    """Primary workflow: CSV upload + Object ID -> automatic 17-feature
+    extraction (app/feature_engine.py, which itself calls the isolated
+    app/stellar_catalog_service.py for the catalog lookup) -> feature
+    validation -> ML prediction (only once every one of the 17 real model
+    features is resolved) -> response.
 
-    def _extract() -> tuple:
+    A light curve alone can only ever supply some of the model's 17 real
+    KOI features -- the rest (stellar/catalog fields, koi_score) require the
+    Object ID to resolve from the live NASA Exoplanet Archive. When they can't
+    be resolved (unknown/mistyped Object ID, or a catalog record missing a
+    field), this deliberately does NOT call the trained model on a
+    partially-guessed vector (that would silently misuse the trained
+    model's input space); `prediction` stays null and `missing_features`
+    tells the caller exactly what's needed. The frontend then only asks the
+    user for those specific remaining fields, not all 17, on the (existing,
+    unmodified) manual-parameter step."""
+    registry = request.app.state.model_registry
+    settings = request.app.state.settings
+    cache = request.app.state.cache
+
+    def _extract():
         time_arr, flux_arr, n_dropped = parse_time_flux_csv(raw_bytes)
-        return compute_feature_vector(time_arr, flux_arr), n_dropped
+        return extract_features(time_arr, flux_arr, object_id), n_dropped
 
     try:
-        # CPU-bound (CSV parsing + the transit search) -- run off the event
-        # loop so a slow/large upload can't block concurrent requests.
-        extraction, n_dropped = await asyncio.to_thread(_extract)
+        # CPU-bound (CSV parsing + the transit search + shape fitting) -- run
+        # off the event loop so a slow/large upload can't block concurrent
+        # requests.
+        result, n_dropped = await asyncio.to_thread(_extract)
     except LightCurveValidationError as exc:
         raise CsvValidationHTTPError(str(exc)) from exc
+
+    extraction = result.extraction
+    feature_models = {
+        canonical: FeatureValueModel(
+            value=fv.value, unit=fv.unit, source=fv.source, status=fv.status, note=fv.note,
+        )
+        for canonical, fv in result.features.items()
+    }
+
+    prediction_response = None
+    if result.ready_for_prediction:
+        ordered_names = list(MODEL_FEATURE_ORDER)
+        ordered_values = [result.features[c].value for c in ordered_names]
+        # Explicit, defense-in-depth contract check (never expected to fail
+        # in practice -- `ready_for_prediction` already guarantees all 17
+        # values are present/finite -- this is what catches a future
+        # accidental reordering/renaming bug before it can reach the model).
+        assert_valid_rf_feature_vector(
+            ordered_names, ordered_values, random_forest=registry.bundle.random_forest,
+        )
+        prediction_features = PredictionFeatures(**dict(zip(FEATURE_ORDER, ordered_values)))
+        logger.info("rf_feature_vector_constructed", extra={"request_id": request_id})
+        prediction_response, _cache_hit, _duration = await predict_with_cache(
+            registry.bundle, cache, prediction_features, settings.rf_weight, settings.cnn_weight,
+            settings.model_version,
+        )
+        prediction_response.request_id = request_id
+        logger.info(
+            "rf_cnn_ensemble_prediction_generated",
+            extra={"request_id": request_id, "prediction": prediction_response.prediction},
+        )
 
     background_tasks.add_task(
         _log_prediction_event, "light_curve", request_id, 0.0, settings.model_version
     )
     logger.info(
         "lightcurve_analysis_served",
-        extra={"request_id": request_id, "model_version": settings.model_version},
+        extra={
+            "request_id": request_id, "model_version": settings.model_version,
+            "ready_for_prediction": result.ready_for_prediction,
+            "missing_features": result.missing_features,
+        },
     )
+
+    warnings = [BEST_EFFORT_WARNING, *result.warnings]
 
     return LightCurveAnalysisResponse(
         filename=file.filename or "lightcurve.csv",
@@ -179,8 +264,23 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
             secondary_eclipse_depth_ppm=extraction.characterisation["secondary_eclipse_depth_ppm"],
         ),
         physics_validation=PHYSICS_VALIDATION_PLACEHOLDER,
-        warnings=[BEST_EFFORT_WARNING],
+        warnings=warnings,
         request_id=request_id,
+        object_id=object_id,
+        features=feature_models,
+        catalog_resolution=CatalogResolutionModel(
+            requested_identifier=result.catalog.requested_identifier,
+            identifier_type=result.catalog.identifier_type,
+            match_status=result.catalog.match_status,
+            matched_kepid=result.catalog.matched_kepid,
+            matched_kepoi_name=result.catalog.matched_kepoi_name,
+            matched_kepler_name=result.catalog.matched_kepler_name,
+            n_candidate_rows=result.catalog.n_candidate_rows,
+            note=result.catalog.note,
+        ),
+        missing_features=result.missing_features,
+        ready_for_prediction=result.ready_for_prediction,
+        prediction=prediction_response,
     )
 
 

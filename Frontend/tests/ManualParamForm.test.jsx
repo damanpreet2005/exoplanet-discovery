@@ -28,4 +28,47 @@ describe("ManualParamForm", () => {
     fireEvent.change(screen.getByLabelText(/Orbital Period/i), { target: { value: "9.75" } });
     expect(onChange).toHaveBeenCalledWith("koi_period", "9.75");
   });
+
+  test("a field with a resolved status renders as a locked, read-only value with a badge", () => {
+    render(
+      <ManualParamForm
+        features={FEATURES}
+        values={{ koi_period: "9.488" }}
+        onChange={() => {}}
+        disabled={false}
+        statusByCanonical={{ koi_period: "estimated" }}
+      />
+    );
+    expect(screen.getByText("9.488")).toBeInTheDocument();
+    expect(screen.getByText(/estimated from light curve/i)).toBeInTheDocument();
+    // Locked -- no editable number input for this field.
+    expect(screen.queryByLabelText(/Orbital Period/i)).not.toBeInTheDocument();
+  });
+
+  test("an 'unavailable' status still renders an editable input", () => {
+    render(
+      <ManualParamForm
+        features={FEATURES}
+        values={{}}
+        onChange={() => {}}
+        disabled={false}
+        statusByCanonical={{ koi_teq: "unavailable" }}
+      />
+    );
+    expect(screen.getByLabelText(/Equilibrium Temperature/i)).toBeInTheDocument();
+  });
+
+  test("expertMode unlocks a resolved field back into an editable input", () => {
+    render(
+      <ManualParamForm
+        features={FEATURES}
+        values={{ koi_period: "9.488" }}
+        onChange={() => {}}
+        disabled={false}
+        statusByCanonical={{ koi_period: "catalog" }}
+        expertMode
+      />
+    );
+    expect(screen.getByLabelText(/Orbital Period/i)).toBeInTheDocument();
+  });
 });
