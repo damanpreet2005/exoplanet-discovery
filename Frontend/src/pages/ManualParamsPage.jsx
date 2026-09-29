@@ -14,7 +14,7 @@ const SUGGESTABLE_CANONICALS = new Set([
 ]);
 
 export default function ManualParamsPage() {
-  const { status, result, finalStatus, finalError, submitCombinedPrediction, acceptExtractedPrediction } = useAnalysis();
+  const { status, result, finalStatus, finalError, submitCombinedPrediction, acceptExtractedPrediction, reset } = useAnalysis();
   const navigate = useNavigate();
 
   const [schemaState, setSchemaState] = useState({ loading: true, features: [], orderConfigured: false, error: null });
@@ -100,6 +100,15 @@ export default function ManualParamsPage() {
     }
   }, [finalStatus, navigate]);
 
+  function handleWrongObjectId() {
+    // The whole light-curve session was analyzed against an object ID that
+    // doesn't resolve to a catalog entry -- clear it (not just this page's
+    // local state) so Step 1 doesn't silently re-show the stale result/error
+    // for an ID the user is about to replace.
+    reset();
+    navigate("/");
+  }
+
   function handleChange(canonical, rawValue) {
     setValues((prev) => ({ ...prev, [canonical]: rawValue }));
     setPrefilled((prev) => {
@@ -177,6 +186,12 @@ export default function ManualParamsPage() {
           <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", margin: 0 }}>
             {result.catalog_resolution.note}
           </p>
+          {(result.catalog_resolution.match_status === "not_found" ||
+            result.catalog_resolution.match_status === "unsupported_identifier_type") && (
+            <button type="button" className="btn btn-ghost" style={{ marginTop: 12 }} onClick={handleWrongObjectId}>
+              Wrong Input? Try Again
+            </button>
+          )}
         </div>
       )}
 
