@@ -2,7 +2,7 @@
  * All network calls go through the Node.js + Express API gateway.
  * This module never talks to the Python FastAPI ML service directly.
  */
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 function generateRequestId() {
   if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
