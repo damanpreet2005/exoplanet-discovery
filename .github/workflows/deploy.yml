@@ -1,0 +1,79 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Least-privilege default: this workflow only reads repo contents (to check
+# out code for testing). It never needs to write issues, PRs, packages, etc.
+permissions:
+  contents: read
+
+# Only one production deployment may run at a time. A second push while a
+# deploy is in flight queues behind it instead of racing it or cancelling it
+# mid-way (cancelling mid-deploy could leave the server in a half-updated
+# state, which is worse than waiting).
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  # Runs the project's own test suites directly on the runner, with no
+  # Docker/root access at all. If this job fails, nothing is deployed.
+  validate:
+    name: Validate
+    runs-on: self-hosted
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Backend - install dependencies
+        working-directory: Backend
+        run: npm ci
+
+      - name: Backend - run tests
+        working-directory: Backend
+        run: npm test
+
+      - name: Frontend - install dependencies
+        working-directory: Frontend
+        run: npm ci
+
+      - name: Frontend - run tests
+        working-directory: Frontend
+        run: npm test
+
+      - name: Frontend - production build check
+        working-directory: Frontend
+        run: npm run build
+
+      - name: ML service - create virtual environment
+        working-directory: ml_service
+        run: python3 -m venv .venv
+
+      - name: ML service - install dependencies
+        working-directory: ml_service
+        run: |
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt
+
+      - name: ML service - run tests
+        working-directory: ml_service
+        run: .venv/bin/pytest
+
+  # Only reached if validate succeeds. Deliberately does NOT check out the
+  # repo or touch Docker directly -- it hands off to one fixed, root-owned
+  # script that the gha-runner account cannot read or modify (see
+  # deploy/exoplanet-deploy.sh and the setup docs for the sudoers rule that
+  # allows exactly this one command, with no arguments, as root).
+  deploy:
+    name: Deploy
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+    timeout-minutes: 10
+    steps:
+      - name: Run restricted deployment script
+        run: sudo -n /usr/local/sbin/exoplanet-deploy.sh
