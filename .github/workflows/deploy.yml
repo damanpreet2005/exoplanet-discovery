@@ -68,6 +68,13 @@ jobs:
         working-directory: ml_service
         run: |
           .venv/bin/pip install --upgrade pip
+          # PyPI's default "torch" build bundles ~1.5GB of nvidia-* CUDA
+          # packages this service never uses (it runs on CPU only, inside a
+          # plain python:3.11-slim container with no GPU). That bundle is also
+          # what was failing to download reliably. Installing the official
+          # CPU-only build first satisfies the same torch>=2.4.1 requirement
+          # from requirements.txt (left untouched) without pulling in CUDA.
+          .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
           .venv/bin/pip install -r requirements.txt
 
       - name: ML service - run tests
