@@ -24,7 +24,7 @@ jobs:
   validate:
     name: Validate
     runs-on: self-hosted
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,9 +49,20 @@ jobs:
         working-directory: Frontend
         run: npm run build
 
+      # The runner's own system Python is 3.14 (too new for scikit-learn==1.6.1
+      # to find a prebuilt wheel, which forces a from-source build that fails).
+      # The ml_service Dockerfile runs on python:3.11-slim, so this pins the
+      # validation job to the same 3.11 line -- matching production, not just
+      # dodging the error. Downloaded into the runner's own tool cache, no
+      # system packages or root access involved.
+      - name: Set up Python 3.11 (matches ml_service's Docker runtime)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
       - name: ML service - create virtual environment
         working-directory: ml_service
-        run: python3 -m venv .venv
+        run: python3.11 -m venv .venv
 
       - name: ML service - install dependencies
         working-directory: ml_service
