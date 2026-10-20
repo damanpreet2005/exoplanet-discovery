@@ -139,7 +139,7 @@ export default function PhysicsPage() {
             Generated {new Date(physicsResult.generated_at).toLocaleString()}
           </p>
 
-          <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 8 }}>
+          <div style={{ display: "flex", justifyContent: "center", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
             <button className="btn btn-ghost" onClick={() => startPhysicsValidation(true)}>
               <Icon name="refresh" size={16} /> Re-run Validation
             </button>

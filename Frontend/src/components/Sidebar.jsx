@@ -1,4 +1,5 @@
-import { NavLink } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { NavLink, useLocation } from "react-router-dom";
 import Logo from "./Logo";
 import Icon from "./Icon";
 
@@ -15,6 +16,12 @@ import Icon from "./Icon";
 // the dock's own width animation finishing. Icons are Google Material
 // Symbols Rounded (see Icon.jsx) chosen for what each destination does --
 // never decorative emoji.
+//
+// Narrow screens (<= 768px, see index.css) have no room for a side dock, so
+// the same panel becomes a floating top bar whose link list is toggled by
+// the menu button. `open` only matters there: the toggle is hidden and the
+// list always shown at wider widths. It closes on navigation, Escape, or a
+// tap outside the panel.
 const WORKFLOW_ITEMS = [
   { to: "/", label: "Upload & Analyze", icon: "satellite_alt", end: true },
   { to: "/manual-parameters", label: "Manual Parameters", icon: "tune" },
@@ -43,17 +50,51 @@ function DockLink({ to, label, icon, end }) {
 }
 
 export default function Sidebar() {
+  const [open, setOpen] = useState(false);
+  const dockRef = useRef(null);
+  const location = useLocation();
+
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function handleKeyDown(event) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    function handlePointerDown(event) {
+      if (dockRef.current && !dockRef.current.contains(event.target)) setOpen(false);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [open]);
+
   return (
-    <aside className="dock" aria-label="Primary navigation">
+    <aside className="dock" aria-label="Primary navigation" data-open={open} ref={dockRef}>
       <div className="dock-panel">
         <div className="dock-brand" title="Exo Discovery">
           <span className="dock-brand-mark">
             <Logo size={26} />
           </span>
           <span className="dock-label dock-brand-label">Exo Discovery</span>
+          <button
+            type="button"
+            className="dock-toggle"
+            aria-expanded={open}
+            aria-controls="dock-nav"
+            aria-label={open ? "Close navigation menu" : "Open navigation menu"}
+            onClick={() => setOpen((value) => !value)}
+          >
+            <Icon name={open ? "close" : "menu"} size={22} />
+          </button>
         </div>
 
-        <nav className="dock-nav">
+        <nav className="dock-nav" id="dock-nav">
           <ul className="dock-list">
             {WORKFLOW_ITEMS.map((item) => (
               <DockLink key={item.to} {...item} />

@@ -137,12 +137,6 @@ h4 {
   z-index: 1;
 }
 
-@media (max-width: 640px) {
-  .app-main {
-    padding-left: calc(var(--dock-width-collapsed) + var(--dock-edge-gap) + 16px);
-  }
-}
-
 /* ---------- Floating navigation dock ----------
    A fixed, vertically-centered floating panel (not an edge-attached full-
    height sidebar). Collapsed to icons-only at rest; expands on hover/focus
@@ -309,19 +303,109 @@ h4 {
     opacity: 1;
     transform: none;
   }
+  /* The permanently-expanded dock must not cover page content, so the
+     content gutter reserves its expanded width instead of the collapsed one. */
+  .app-main {
+    padding-left: calc(var(--dock-width-expanded) + var(--dock-edge-gap) + 28px);
+  }
 }
 
-@media (max-width: 640px) {
+/* Menu button -- only shown in the narrow-screen top bar below. */
+.dock-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.dock-toggle:hover,
+.dock[data-open="true"] .dock-toggle {
+  background: color-mix(in srgb, var(--color-accent-secondary) 12%, transparent);
+  color: var(--color-text-primary);
+}
+
+.dock-toggle:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* ---------- Narrow screens: the dock becomes a floating top bar ----------
+   Below tablet-landscape width there's no room for a side dock (it took a
+   quarter of a 320px screen collapsed, and covered most of it expanded on
+   touch). The same panel instead floats across the top, carrying the brand
+   and a menu button; the full labelled link list opens inside the panel. */
+@media (max-width: 768px) {
   :root {
     --dock-edge-gap: 12px;
-    --dock-width-collapsed: 56px;
-    --dock-width-expanded: 204px;
+    --mobile-bar-height: 56px;
   }
-  .dock-panel {
-    padding: 10px 0;
+
+  .app-main {
+    padding-top: calc(var(--mobile-bar-height) + var(--dock-edge-gap) + 24px);
+    padding-left: clamp(16px, 4vw, 48px);
   }
+
+  .dock {
+    top: var(--dock-edge-gap);
+    left: var(--dock-edge-gap);
+    right: var(--dock-edge-gap);
+    transform: none;
+    max-height: none;
+  }
+
+  .dock .dock-panel,
+  .dock:hover .dock-panel,
+  .dock:focus-within .dock-panel {
+    width: auto;
+    max-height: calc(100vh - 2 * var(--dock-edge-gap));
+    max-height: calc(100dvh - 2 * var(--dock-edge-gap));
+    padding: 0;
+    border-radius: 18px;
+    transition: none;
+  }
+
+  .dock-brand {
+    min-height: var(--mobile-bar-height);
+    padding: 6px 6px 6px 16px;
+    margin-bottom: 0;
+    border-bottom: none;
+  }
+
+  .dock[data-open="true"] .dock-brand {
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .dock-label {
+    opacity: 1;
+    transform: none;
+  }
+
+  .dock-toggle {
+    display: inline-flex;
+  }
+
+  .dock-nav {
+    display: none;
+    padding: 8px 0 10px;
+  }
+
+  .dock[data-open="true"] .dock-nav {
+    display: flex;
+    animation: fade-in-up 0.2s ease both;
+  }
+
   .dock-link {
-    height: 40px;
+    height: 44px;
   }
 }
 
@@ -633,6 +717,21 @@ h4 {
   margin: 2px 0 0;
 }
 
+/* Contains a wide table's horizontal scroll so it never widens the page.
+   The scroll container is a new block formatting context, so the table's
+   top margin moves onto the wrapper to keep collapsing with the heading
+   above exactly as it did before. */
+.table-scroll {
+  max-width: 100%;
+  margin-top: 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll > .feature-table {
+  margin-top: 0;
+}
+
 .feature-table {
   margin-top: 12px;
   width: 100%;
@@ -922,7 +1021,7 @@ h4 {
 
 @media (max-width: 640px) {
   .comparison-row {
-    grid-template-columns: 70px 1fr 90px;
+    grid-template-columns: 70px minmax(0, 1fr) auto;
   }
 }
 
@@ -1259,4 +1358,74 @@ summary:focus-visible {
   font-size: 0.85rem;
   font-weight: 600;
   margin-bottom: 20px;
+}
+
+/* ---------- Small screens ----------
+   Mobile-only adjustments to spacing, type size, and tap targets. Nothing
+   here applies above 640px, so the desktop layout is untouched. */
+
+.page-title {
+  font-size: clamp(1.4rem, 1rem + 2.5vw, 1.75rem);
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 640px) {
+  .page-header {
+    margin-bottom: 22px;
+  }
+
+  .btn {
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  /* 16px keeps iOS Safari from zooming the page when a field is focused. */
+  .param-input {
+    font-size: 16px;
+  }
+
+  .summary-tile .value,
+  .candidate-detail dd,
+  .physics-metric-value,
+  .physics-missing-line code,
+  .feature-table th,
+  .feature-table td {
+    overflow-wrap: anywhere;
+  }
+
+  .step-indicator {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .step-connector {
+    display: none;
+  }
+
+  .comparison-row-label {
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 480px) {
+  .panel {
+    padding: 18px;
+  }
+
+  .dropzone {
+    padding: 36px 16px;
+  }
+
+  .summary-row {
+    gap: 12px;
+  }
+
+  .summary-tile .value {
+    font-size: 1.4rem;
+  }
+
+  .candidate-card {
+    padding: 14px;
+  }
 }
