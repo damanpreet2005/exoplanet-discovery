@@ -93,32 +93,36 @@ export default function PhysicsTestCard({ test }) {
           <p className="physics-equation"><strong>Equation:</strong> {test.calculation?.equation}</p>
 
           <h4>Inputs</h4>
-          <table className="feature-table">
-            <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
-            <tbody>
-              {Object.entries(test.calculation?.inputs || {}).map(([key, m]) => (
-                <tr key={key}>
-                  <th>{key}</th>
-                  <td className="value">{fmt(m)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="table-scroll">
+            <table className="feature-table">
+              <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+              <tbody>
+                {Object.entries(test.calculation?.inputs || {}).map(([key, m]) => (
+                  <tr key={key}>
+                    <th>{key}</th>
+                    <td className="value">{fmt(m)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           {test.calculation?.derived && Object.keys(test.calculation.derived).length > 0 && (
             <>
               <h4>Derived Values</h4>
-              <table className="feature-table">
-                <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
-                <tbody>
-                  {Object.entries(test.calculation.derived).map(([key, m]) => (
-                    <tr key={key}>
-                      <th>{key.replace(/_/g, " ")}</th>
-                      <td className="value">{fmt(m)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-scroll">
+                <table className="feature-table">
+                  <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
+                  <tbody>
+                    {Object.entries(test.calculation.derived).map(([key, m]) => (
+                      <tr key={key}>
+                        <th>{key.replace(/_/g, " ")}</th>
+                        <td className="value">{fmt(m)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
 

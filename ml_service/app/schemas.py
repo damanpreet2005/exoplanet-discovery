@@ -198,7 +198,7 @@ class LightCurveAnalysisResponse(BaseModel):
                      "each fully attributed with value/unit/source/status/note.",
     )
     catalog_resolution: CatalogResolutionModel | None = Field(
-        default=None, description="What the Object ID resolved to in the live NASA Exoplanet Archive lookup."
+        default=None, description="What the Object ID resolved to in the local KOI catalogue lookup."
     )
     missing_features: list[str] = Field(
         default_factory=list,

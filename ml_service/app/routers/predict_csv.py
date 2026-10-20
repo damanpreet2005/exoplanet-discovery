@@ -127,7 +127,7 @@ async def predict_csv_endpoint(
         description="Required for a light-curve upload: the KIC ID / KOI name / Kepler planet "
                      "name for the star/object this light curve belongs to, used to resolve "
                      "catalog-only stellar fields (koi_steff, koi_slogg, koi_srad, ra, dec, "
-                     "koi_kepmag, koi_score) from the live NASA Exoplanet Archive. Not used for a "
+                     "koi_kepmag, koi_score) from the local NASA Exoplanet Archive KOI catalogue. Not used for a "
                      "tabular Kepler-catalog CSV upload, which already carries its own koi_* columns.",
     ),
 ):
@@ -171,7 +171,7 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
 
     A light curve alone can only ever supply some of the model's 17 real
     KOI features -- the rest (stellar/catalog fields, koi_score) require the
-    Object ID to resolve from the live NASA Exoplanet Archive. When they can't
+    Object ID to resolve from the local NASA Exoplanet Archive KOI catalogue. When they can't
     be resolved (unknown/mistyped Object ID, or a catalog record missing a
     field), this deliberately does NOT call the trained model on a
     partially-guessed vector (that would silently misuse the trained

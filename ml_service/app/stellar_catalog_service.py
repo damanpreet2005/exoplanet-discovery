@@ -1,26 +1,21 @@
 """
 Stellar catalog service: looks up an uploaded light curve's Object ID
-against the real NASA Exoplanet Archive and returns the catalog-only KOI
-fields (koi_score, koi_tce_plnt_num, koi_steff, koi_slogg, koi_srad, ra,
-dec, koi_kepmag) the Random Forest needs but a light curve alone cannot
-supply. Deliberately isolated from app/feature_engine.py and
-app/predictor.py (the RF/CNN/ensemble code) -- this module's only job is
-"Object ID in, real catalog data (or an explicit non-match/error) out".
+against the local KOI catalogue and returns the catalog-only KOI fields
+(koi_score, koi_tce_plnt_num, koi_steff, koi_slogg, koi_srad, ra, dec,
+koi_kepmag) the Random Forest needs but a light curve alone cannot supply.
+Deliberately isolated from app/feature_engine.py and app/predictor.py (the
+RF/CNN/ensemble code) -- this module's only job is "Object ID in, real
+catalog data (or an explicit non-match/error) out".
 
-DATA SOURCE -- real, not fabricated, and now fetched live: every lookup
-queries the NASA Exoplanet Archive's Kepler Objects of Interest (KOI)
-"cumulative" table over its TAP API (see app/nasa_exoplanet_archive_client.py,
-which owns all the raw HTTP/ADQL mechanics -- this module only builds WHERE
-clauses and interprets the rows that come back). This is the same table
-`app/feature_aliases.py`'s MODEL_FEATURE_ORDER was independently verified
-against, so resolving a target's stellar/catalog parameters from it is a
-legitimate catalog lookup by identifier, not an estimate and not an invented
-value.
-
-(A local snapshot of this same table previously shipped at
-ml_service/data/koi_catalog.csv for offline lookups. Nothing in this module
-reads that file anymore -- see the migration note in that file's directory
-for whether it's still needed.)
+DATA SOURCE -- real, not fabricated: the NASA Exoplanet Archive's Kepler
+Objects of Interest (KOI) "cumulative" table, shipped as a local snapshot at
+ml_service/data/koi_catalog.csv (see app/koi_catalog.py, which owns loading
+and indexing the file -- this module only parses identifiers and interprets
+the matching rows). This is the same table `app/feature_aliases.py`'s
+MODEL_FEATURE_ORDER was independently verified against, so resolving a
+target's stellar/catalog parameters from it is a legitimate catalog lookup
+by identifier, not an estimate and not an invented value. Lookups are local
+and offline: they never depend on the live Archive being reachable.
 
 IDENTIFIER TYPES -- this deployment's trained model was fit on Kepler KOI
 data (see app/feature_aliases.py's provenance notes), so only Kepler-mission
@@ -31,7 +26,9 @@ Input Catalog (TIC) identifier is a DIFFERENT catalog's numbering scheme for
 a different mission -- 'TIC 12345' and 'KIC 12345' are not the same object,
 and this module never treats one as the other. TIC-shaped input is detected
 and rejected with an explicit, distinct status rather than silently
-searched against the (unrelated) Kepler KIC index.
+searched against the (unrelated) Kepler KIC index. Likewise a KIC number is
+only ever matched against `kepid`, and a KOI number only against
+`kepoi_name` -- 'KIC 752' and 'KOI 752' are unrelated objects.
 
 A single identifier can resolve to more than one catalog row: a star (KIC/
 kepid) can host multiple KOIs (planet candidates), each with its own
@@ -41,27 +38,13 @@ distinction rather than silently picking a row: stellar fields are returned
 whenever the star is uniquely identified; koi_score/koi_tce_plnt_num are
 only returned when the request resolves to exactly one KOI (planet
 candidate) row.
-
-SAFETY NOTE on query construction: no raw user-supplied Object ID text is
-ever interpolated directly into an ADQL WHERE clause. Every value embedded
-in a query is either a regex-validated integer, or a canonical KOI/Kepler-
-name string this module reconstructs itself from regex-captured digits
-(e.g. f"K{n:05d}.{p:02d}") -- never the caller's original string verbatim.
 """
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 
-from app.cache import InMemoryTTLCache
-from app.config import get_settings
-from app.nasa_exoplanet_archive_client import (
-    NasaApiError,
-    NasaApiHttpError,
-    NasaApiMalformedResponseError,
-    NasaApiTimeoutError,
-    NasaApiUnavailableError,
-    query_cumulative_table,
-)
+from app.koi_catalog import KoiCatalog, KoiCatalogUnavailableError, get_koi_catalog, normalize_identifier
 
 logger = logging.getLogger("ml_service")
 
@@ -69,31 +52,6 @@ STELLAR_FIELDS = ("koi_steff", "koi_slogg", "koi_srad", "ra", "dec", "koi_kepmag
 KOI_LEVEL_FIELDS = ("koi_score", "koi_tce_plnt_num")
 
 MAX_OBJECT_ID_LENGTH = 64
-
-_cache: InMemoryTTLCache | None = None
-
-
-def _query_cache() -> InMemoryTTLCache:
-    """Simple in-memory TTL cache (Object ID -> raw NASA rows), so the same
-    star/KOI isn't re-queried over the network on every analysis. Lazily
-    built from settings rather than at import time, so tests can override
-    NASA_CACHE_* env vars freely. Intentionally in-process (no Redis/new
-    infra) -- consistent with app/cache.py's existing prediction cache."""
-    global _cache
-    if _cache is None:
-        settings = get_settings()
-        _cache = InMemoryTTLCache(settings.nasa_cache_max_size, settings.nasa_cache_ttl_seconds)
-    return _cache
-
-
-def _cached_query(cache_key: str, where_clause: str) -> list[dict]:
-    cache = _query_cache()
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached["rows"]
-    rows = query_cumulative_table(where_clause)
-    cache.set(cache_key, {"rows": rows})
-    return rows
 
 
 class InvalidObjectIdError(Exception):
@@ -103,28 +61,26 @@ class InvalidObjectIdError(Exception):
 
 
 def _coerce_float(raw) -> float | None:
-    """Accepts whatever the NASA TAP JSON response hands back for a numeric
-    field: a native float/int, a numeric string, or None/blank for a column
-    the Archive itself has no recorded value for."""
-    if raw is None:
+    """Accepts a catalogue cell for a numeric field: a numeric string, a
+    native float/int, or None/blank for a column the KOI table itself has no
+    recorded value for. NaN/inf are treated as missing, so every value that
+    reaches the API is JSON-safe."""
+    if raw is None or isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
-        return float(raw) if raw == raw else None  # filters NaN
-    raw = str(raw).strip()
-    if raw == "":
-        return None
-    try:
         value = float(raw)
-    except ValueError:
-        return None
-    return value if value == value else None
+    else:
+        raw = str(raw).strip()
+        if raw == "":
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            return None
+    return value if math.isfinite(value) else None
 
 
-def _normalize(s: str) -> str:
-    """Uppercase, strip surrounding whitespace, collapse internal
-    whitespace/hyphens/underscores -- so 'Kepler-227 b', 'kepler 227b', and
-    'KEPLER-227-B' all normalize identically."""
-    return re.sub(r"[\s\-_]+", "", s.strip().upper())
+_normalize = normalize_identifier
 
 
 @dataclass
@@ -153,22 +109,15 @@ def _empty_resolution(identifier: str | None, identifier_type: str, status: str,
     )
 
 
-def _lookup_error_resolution(identifier: str, identifier_type: str, exc: NasaApiError) -> CatalogResolution:
-    """A genuine service-availability problem (timeout/unreachable/HTTP
-    error/malformed body) -- distinct from a legitimate 'not found', so the
-    caller/frontend can tell "this Object ID doesn't exist" apart from "the
-    Archive couldn't be reached right now, try again"."""
-    if isinstance(exc, NasaApiTimeoutError):
-        note = "The NASA Exoplanet Archive did not respond in time. Please try again shortly."
-    elif isinstance(exc, NasaApiUnavailableError):
-        note = "The NASA Exoplanet Archive could not be reached. Please try again shortly."
-    elif isinstance(exc, NasaApiHttpError):
-        note = f"The NASA Exoplanet Archive returned an error (HTTP {exc.status_code}). Please try again shortly."
-    elif isinstance(exc, NasaApiMalformedResponseError):
-        note = "The NASA Exoplanet Archive returned an unexpected response. Please try again shortly."
-    else:
-        note = "The NASA Exoplanet Archive lookup failed unexpectedly."
-    return _empty_resolution(identifier, identifier_type, "lookup_error", note)
+def _lookup_error_resolution(identifier: str, identifier_type: str, exc: KoiCatalogUnavailableError) -> CatalogResolution:
+    """The catalogue itself couldn't be read -- distinct from a legitimate
+    'not found', so the caller/frontend never tells the user an object
+    doesn't exist when the lookup simply couldn't run."""
+    return _empty_resolution(
+        identifier, identifier_type, "lookup_error",
+        "The local KOI catalogue could not be loaded, so this Object ID could not be looked up. "
+        "This is a server configuration problem, not a missing object.",
+    )
 
 
 def _resolution_from_single_row(identifier: str, identifier_type: str, row: dict, note: str) -> CatalogResolution:
@@ -232,7 +181,9 @@ def _classify_identifier(compact: str) -> str:
     Kepler KIC number just because both are integers."""
     if re.match(r"^TIC\d+$", compact):
         return "tic"
-    if re.match(r"^(?:KIC)?\d+$", compact):
+    # A trailing ".0"/".00" is tolerated (a KIC number exported as a float);
+    # anything else after the dot is not a KIC ID.
+    if re.match(r"^(?:KIC)?\d+(?:\.0+)?$", compact):
         return "kic"
     if re.match(r"^K\d{5}\.\d{2}$", compact) or re.match(r"^KOI\d+(\.\d+)?$", compact):
         return "koi_name"
@@ -241,16 +192,33 @@ def _classify_identifier(compact: str) -> str:
     return "unrecognized"
 
 
-def resolve_object_id(object_id: str | None) -> CatalogResolution:
-    """Resolves an Object ID against the live NASA Exoplanet Archive.
-    Accepts a KIC ID ('11904151', 'KIC 11904151'), a KOI name ('K00752.01',
-    'KOI-752.01', 'KOI 752'), or a confirmed Kepler planet name
+def _coerce_object_id(object_id) -> str | None:
+    """Object IDs normally arrive as form strings, but a bare KIC number may
+    come through as an int (or an integral float such as 10797460.0 from a
+    spreadsheet export). Those are stringified as plain integers -- never as
+    '10797460.0', which would no longer look like a KIC ID."""
+    if object_id is None or isinstance(object_id, str):
+        return object_id
+    if isinstance(object_id, bool):
+        raise InvalidObjectIdError("Object ID must be a string or an integer KIC ID.")
+    if isinstance(object_id, int):
+        return str(object_id)
+    if isinstance(object_id, float) and math.isfinite(object_id) and object_id.is_integer():
+        return str(int(object_id))
+    raise InvalidObjectIdError("Object ID must be a string or an integer KIC ID.")
+
+
+def resolve_object_id(object_id: str | int | None) -> CatalogResolution:
+    """Resolves an Object ID against the local KOI catalogue.
+    Accepts a KIC ID ('11904151', 'KIC 11904151', 11904151), a KOI name
+    ('K00752.01', 'KOI-752.01', 'KOI 752'), or a confirmed Kepler planet name
     ('Kepler-227 b'). A TESS TIC identifier ('TIC 141914082') is recognized
     and explicitly rejected as unsupported for this (Kepler-trained)
     deployment rather than ever being searched against the unrelated KIC
     field. Returns an explicit not-found/not-provided/unsupported/
     lookup-error result rather than ever guessing a closest match or
-    fabricating a value on a network failure."""
+    fabricating a value when the catalogue can't be read."""
+    object_id = _coerce_object_id(object_id)
     if object_id is None or not object_id.strip():
         return _empty_resolution(None, "none", "not_provided", "No Object ID was supplied.")
 
@@ -271,42 +239,65 @@ def resolve_object_id(object_id: str | None) -> CatalogResolution:
             "KOI name, or confirmed Kepler planet name instead.",
         )
 
+    if identifier_type == "unrecognized":
+        return _empty_resolution(
+            raw, "unrecognized", "not_found",
+            f"'{raw}' did not match any recognized KIC ID, KOI name, or Kepler planet name format.",
+        )
+
     try:
-        if identifier_type == "kic":
-            return _resolve_kic(raw, compact)
-        if identifier_type == "koi_name":
-            return _resolve_koi_name(raw, compact)
-        if identifier_type == "kepler_name":
-            return _resolve_kepler_name(raw, compact)
-    except NasaApiError as exc:
+        catalog = get_koi_catalog()
+    except KoiCatalogUnavailableError as exc:
         return _lookup_error_resolution(raw, identifier_type, exc)
 
-    return _empty_resolution(
-        raw, "unrecognized", "not_found",
-        f"'{raw}' did not match any recognized KIC ID, KOI name, or Kepler planet name format.",
+    if identifier_type == "kic":
+        return _resolve_kic(catalog, raw, compact)
+    if identifier_type == "koi_name":
+        return _resolve_koi_name(catalog, raw, compact)
+    return _resolve_kepler_name(catalog, raw, compact)
+
+
+def _resolution_from_rows(raw: str, identifier_type: str, rows: list[dict], single_note: str) -> CatalogResolution:
+    """One row -> a full KOI match. Several rows on one star -> stellar
+    fields only. Several rows spread across different stars can only mean
+    conflicting catalogue entries for one identifier; nothing is resolved
+    rather than picking one arbitrarily."""
+    if len(rows) == 1:
+        return _resolution_from_single_row(raw, identifier_type, rows[0], single_note)
+    kepids = {row["kepid"] for row in rows}
+    if len(kepids) == 1:
+        return _resolution_from_star_only(raw, identifier_type, rows[0]["kepid"], rows)
+    logger.warning("koi_catalog_ambiguous_identifier", extra={"identifier": raw, "n_rows": len(rows)})
+    resolution = _empty_resolution(
+        raw, identifier_type, "lookup_error",
+        f"'{raw}' matches {len(rows)} conflicting KOI catalogue entries on different stars, so no "
+        "stellar parameters were resolved. Provide a more specific identifier.",
     )
+    resolution.n_candidate_rows = len(rows)
+    return resolution
 
 
-def _resolve_kic(raw: str, compact: str) -> CatalogResolution:
-    kepid_match = re.match(r"^(?:KIC)?(\d+)$", compact)
-    kepid = int(kepid_match.group(1))
-    rows = _cached_query(f"kic:{kepid}", f"kepid = {kepid}")
+def _resolve_kic(catalog: KoiCatalog, raw: str, compact: str) -> CatalogResolution:
+    kepid = int(re.match(r"^(?:KIC)?(\d+)", compact).group(1))
+    rows = catalog.by_kepid.get(kepid, [])
     if rows:
-        if len(rows) == 1:
-            return _resolution_from_single_row(raw, "kic", rows[0], f"Matched KIC {kepid} (single KOI on record).")
-        return _resolution_from_star_only(raw, "kic", kepid, rows)
+        return _resolution_from_rows(raw, "kic", rows, f"Matched KIC {kepid} (single KOI on record).")
     return _empty_resolution(raw, "kic", "not_found", f"No catalog entry found for KIC {kepid}.")
 
 
-def _resolve_koi_name(raw: str, compact: str) -> CatalogResolution:
+def _resolve_canonical_koi_name(catalog: KoiCatalog, raw: str, canonical: str) -> CatalogResolution:
+    rows = catalog.by_kepoi_name.get(canonical, [])
+    if rows:
+        return _resolution_from_rows(raw, "koi_name", rows, f"Matched KOI name {canonical}.")
+    return _empty_resolution(raw, "koi_name", "not_found", f"No catalog entry found for KOI {canonical}.")
+
+
+def _resolve_koi_name(catalog: KoiCatalog, raw: str, compact: str) -> CatalogResolution:
     # Canonical KOI name, e.g. K00752.01.
     exact_match = re.match(r"^K(\d{5})\.(\d{2})$", compact)
     if exact_match:
         canonical = f"K{int(exact_match.group(1)):05d}.{int(exact_match.group(2)):02d}"
-        rows = _cached_query(f"koi_name:{canonical}", f"kepoi_name = '{canonical}'")
-        if rows:
-            return _resolution_from_single_row(raw, "koi_name", rows[0], f"Matched KOI name {canonical}.")
-        return _empty_resolution(raw, "koi_name", "not_found", f"No catalog entry found for KOI {canonical}.")
+        return _resolve_canonical_koi_name(catalog, raw, canonical)
 
     # KOI-<number>[.<planet>] in looser forms, e.g. "KOI-752.01" or "KOI752".
     koi_match = re.match(r"^KOI0*(\d+)(?:\.(\d+))?$", compact)
@@ -315,38 +306,23 @@ def _resolve_koi_name(raw: str, compact: str) -> CatalogResolution:
         planet_suffix = koi_match.group(2)
         if planet_suffix:
             canonical = f"K{koi_number:05d}.{int(planet_suffix):02d}"
-            rows = _cached_query(f"koi_name:{canonical}", f"kepoi_name = '{canonical}'")
-            if rows:
-                return _resolution_from_single_row(raw, "koi_name", rows[0], f"Matched KOI name {canonical}.")
-            return _empty_resolution(raw, "koi_name", "not_found", f"No catalog entry found for KOI {canonical}.")
+            return _resolve_canonical_koi_name(catalog, raw, canonical)
 
-        prefix = f"K{koi_number:05d}."
-        rows = _cached_query(f"koi_number:{koi_number}", f"kepoi_name like '{prefix}%'")
+        rows = catalog.by_koi_number.get(koi_number, [])
         if rows:
-            if len(rows) == 1:
-                return _resolution_from_single_row(raw, "koi_name", rows[0], f"Matched KOI {koi_number} (single planet candidate).")
-            kepid_raw = rows[0].get("kepid")
-            kepid = int(kepid_raw) if kepid_raw is not None else 0
-            return _resolution_from_star_only(raw, "koi_name", kepid, rows)
+            return _resolution_from_rows(raw, "koi_name", rows, f"Matched KOI {koi_number} (single planet candidate).")
         return _empty_resolution(raw, "koi_name", "not_found", f"No catalog entry found for KOI {koi_number}.")
 
     return _empty_resolution(raw, "koi_name", "not_found", f"'{raw}' is not a recognized KOI name format.")
 
 
-def _resolve_kepler_name(raw: str, compact: str) -> CatalogResolution:
-    number_match = re.match(r"^KEPLER(\d+[A-Z]*)", compact)
-    if not number_match:
+def _resolve_kepler_name(catalog: KoiCatalog, raw: str, compact: str) -> CatalogResolution:
+    if not re.match(r"^KEPLER\d+[A-Z]*$", compact):
         return _empty_resolution(raw, "kepler_name", "not_found", f"'{raw}' is not a recognized Kepler planet name format.")
 
-    # Only the leading digits are a safe/reliable LIKE prefix -- the exact
-    # match against candidates (below) is what actually confirms identity,
-    # so a slightly loose prefix here can never cause a wrong match.
-    digits_match = re.match(r"^(\d+)", number_match.group(1))
-    kepler_number = digits_match.group(1) if digits_match else number_match.group(1)
-
-    rows = _cached_query(f"kepler_number:{kepler_number}", f"kepler_name like 'Kepler-{kepler_number}%'")
-    for row in rows:
-        candidate_name = row.get("kepler_name") or ""
-        if _normalize(candidate_name) == compact:
-            return _resolution_from_single_row(raw, "kepler_name", row, f"Matched Kepler name {candidate_name}.")
+    # Exact normalized match only -- 'Kepler-2270 x' can never satisfy a
+    # request for 'Kepler-227 b'.
+    rows = catalog.by_kepler_name.get(compact, [])
+    if rows:
+        return _resolution_from_rows(raw, "kepler_name", rows, f"Matched Kepler name {rows[0]['kepler_name']}.")
     return _empty_resolution(raw, "kepler_name", "not_found", f"No catalog entry found for Kepler name '{raw}'.")

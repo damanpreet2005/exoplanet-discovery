@@ -4,32 +4,9 @@ import pytest
 from app import stellar_catalog_service as scs
 from app.feature_engine import extract_features
 
-K00752_01 = {
-    "kepid": 10797460, "kepoi_name": "K00752.01", "kepler_name": "Kepler-227 b",
-    "koi_score": 1.0, "koi_tce_plnt_num": 1,
-    "koi_steff": 5455.0, "koi_slogg": 4.467, "koi_srad": 0.9270,
-    "ra": 291.934230, "dec": 48.141651, "koi_kepmag": 15.347,
-}
-K00752_02 = {
-    "kepid": 10797460, "kepoi_name": "K00752.02", "kepler_name": "Kepler-227 c",
-    "koi_score": 0.969, "koi_tce_plnt_num": 2,
-    "koi_steff": 5455.0, "koi_slogg": 4.467, "koi_srad": 0.9270,
-    "ra": 291.934230, "dec": 48.141651, "koi_kepmag": 15.347,
-}
-
-
-@pytest.fixture(autouse=True)
-def fresh_cache(monkeypatch):
-    """Isolates the NASA-lookup cache between tests; also guarantees no
-    test in this file ever hits the live NASA Exoplanet Archive -- every
-    lookup here is served from a monkeypatched fake."""
-    monkeypatch.setattr(scs, "_cache", None)
-
-
-def mock_nasa(monkeypatch, rows_by_clause: dict[str, list[dict]]):
-    def fake_query_cumulative_table(where_clause: str) -> list[dict]:
-        return rows_by_clause.get(where_clause, [])
-    monkeypatch.setattr(scs, "query_cumulative_table", fake_query_cumulative_table)
+# Catalogue lookups in this file are served by the real local KOI catalogue
+# (ml_service/data/koi_catalog.csv): kepid 10797460 hosts K00752.01
+# (Kepler-227 b) and K00752.02 (Kepler-227 c).
 
 TRUE_PERIOD = 8.0
 TRUE_DURATION_DAYS = 0.15
@@ -142,7 +119,6 @@ class TestWithCatalogIdentifier:
         assert result.features["koi_steff"].status == "unavailable"
 
     def test_ambiguous_star_only_resolves_stellar_fields(self, monkeypatch):
-        mock_nasa(monkeypatch, {"kepid = 10797460": [K00752_01, K00752_02]})
         time, flux = make_box_light_curve()
         result = extract_features(time, flux, "10797460")
         assert result.catalog.match_status == "matched_star"
@@ -150,7 +126,6 @@ class TestWithCatalogIdentifier:
         assert result.features["koi_score"].status == "unavailable"
 
     def test_exact_koi_match_resolves_all_catalog_fields(self, monkeypatch):
-        mock_nasa(monkeypatch, {"kepoi_name = 'K00752.01'": [K00752_01]})
         time, flux = make_box_light_curve()
         result = extract_features(time, flux, "K00752.01")
         assert result.catalog.match_status == "matched_koi"
@@ -161,7 +136,6 @@ class TestWithCatalogIdentifier:
         assert result.features["koi_tce_plnt_num"].source == "nasa_koi_catalog"
 
     def test_derived_planet_radius_uses_resolved_stellar_radius(self, monkeypatch):
-        mock_nasa(monkeypatch, {"kepoi_name = 'K00752.01'": [K00752_01]})
         time, flux = make_box_light_curve()
         result = extract_features(time, flux, "K00752.01")
         assert result.features["koi_prad"].status == "derived"
@@ -172,7 +146,6 @@ class TestWithCatalogIdentifier:
         # catalog identifier (so all stellar/catalog fields resolve), every
         # one of the 17 features should be available -- the true "zero
         # manual entry" path.
-        mock_nasa(monkeypatch, {"kepoi_name = 'K00752.01'": [K00752_01]})
         time, flux = make_trapezoid_light_curve()
         result = extract_features(time, flux, "K00752.01")
         assert result.missing_features == []
