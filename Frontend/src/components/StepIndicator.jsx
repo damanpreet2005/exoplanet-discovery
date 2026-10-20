@@ -1,3 +1,5 @@
+import Icon from "./Icon";
+
 const STEPS = [
   { n: 1, label: "Upload Light Curve" },
   { n: 2, label: "Planet & Stellar Parameters" },
@@ -9,7 +11,9 @@ export default function StepIndicator({ current }) {
     <div className="step-indicator">
       {STEPS.map((step, i) => (
         <div key={step.n} className={`step-item${step.n === current ? " active" : ""}${step.n < current ? " done" : ""}`}>
-          <span className="step-dot">{step.n < current ? "✓" : step.n}</span>
+          <span className="step-dot">
+            {step.n < current ? <Icon name="check" size={14} /> : step.n}
+          </span>
           <span className="step-label">
             Step {step.n} — {step.label}
           </span>

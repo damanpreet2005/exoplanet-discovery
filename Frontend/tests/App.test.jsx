@@ -5,7 +5,7 @@ import App from "../src/App";
 describe("App shell", () => {
   test("renders sidebar navigation and the upload page by default", () => {
     render(<App />);
-    expect(screen.getByText("Exoplanet Discovery")).toBeInTheDocument();
+    expect(screen.getByText("Exo Discovery")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Step 1.*Upload Light Curve/i })).toBeInTheDocument();
     expect(screen.getByText(/Drag & drop an observational CSV here/i)).toBeInTheDocument();
   });

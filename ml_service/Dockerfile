@@ -3,7 +3,13 @@ FROM python:3.11-slim
 WORKDIR /srv
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# PyPI's default "torch" build bundles ~1.5GB of nvidia-* CUDA packages this
+# service never uses (it runs on CPU only, inside this plain python:3.11-slim
+# container with no GPU). Installing the official CPU-only build first
+# satisfies the same torch>=2.4.1 requirement from requirements.txt (left
+# untouched) without pulling in CUDA.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY data ./data

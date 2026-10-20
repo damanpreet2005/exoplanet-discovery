@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import ManualParamForm from "../components/ManualParamForm";
 import StateBlock from "../components/StateBlock";
 import StepIndicator from "../components/StepIndicator";
+import Icon from "../components/Icon";
 import { fetchFeatureSchema } from "../api/client";
 import { useAnalysis, STATUS, FINAL_STATUS } from "../context/AnalysisContext";
 
@@ -148,7 +149,7 @@ export default function ManualParamsPage() {
       <div className="fade-in">
         <StepIndicator current={2} />
         <div className="panel">
-          <StateBlock icon="✨" title="All 17 parameters resolved automatically" description="Running the trained model — you're being taken straight to your results." />
+          <StateBlock icon={<Icon name="auto_awesome" size={32} />} title="All 17 parameters resolved automatically" description="Running the trained model — you're being taken straight to your results." />
         </div>
       </div>
     );
@@ -166,7 +167,9 @@ export default function ManualParamsPage() {
         </p>
       </header>
 
-      <div className="attached-banner">✓ Light curve attached — {result.filename}</div>
+      <div className="attached-banner">
+        <Icon name="check_circle" size={16} /> Light curve attached — {result.filename}
+      </div>
 
       {result.catalog_resolution && (
         <div className="panel">
@@ -218,12 +221,12 @@ export default function ManualParamsPage() {
       </div>
 
       <div className="panel">
-        {schemaState.loading && <StateBlock icon="⏳" title="Loading parameter list…" />}
+        {schemaState.loading && <StateBlock icon={<Icon name="progress_activity" size={32} className="icon-spin" />} title="Loading parameter list…" />}
 
         {schemaState.error && (
           <StateBlock
             variant="error"
-            icon="⚠️"
+            icon={<Icon name="error" size={32} />}
             title="Could not load the parameter schema"
             description={schemaState.error.message || "Is the backend running?"}
           />
@@ -232,8 +235,9 @@ export default function ManualParamsPage() {
         {!schemaState.loading && !schemaState.error && (
           <>
             {!schemaState.orderConfigured && (
-              <p style={{ color: "var(--warning)", fontSize: "0.85rem", marginTop: 0 }}>
-                ⚠️ The model's exact trained feature order has not been confirmed in this deployment
+              <p style={{ color: "var(--warning)", fontSize: "0.85rem", marginTop: 0, display: "flex", alignItems: "flex-start", gap: 6 }}>
+                <Icon name="warning" size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                The model's exact trained feature order has not been confirmed in this deployment
                 yet, so submitting will return a clear configuration error rather than a fabricated
                 prediction until it is.
               </p>
@@ -277,7 +281,7 @@ export default function ManualParamsPage() {
           <div style={{ marginTop: 24 }}>
             <StateBlock
               variant="error"
-              icon="⚠️"
+              icon={<Icon name="error" size={32} />}
               title={finalError?.code || "Prediction failed"}
               description={finalError?.message}
             />

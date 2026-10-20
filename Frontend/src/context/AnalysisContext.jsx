@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback } from "react";
-import { uploadCsvForAnalysis, submitManualParameters } from "../api/client";
+import { uploadCsvForAnalysis, submitManualParameters, runPhysicsValidation as runPhysicsValidationApi } from "../api/client";
 
 const AnalysisContext = createContext(null);
 
@@ -21,7 +21,27 @@ export const FINAL_STATUS = {
   ERROR: "error",
 };
 
+// Stage 2 (Physics Validation) has its own status machine, keyed to a
+// specific candidate's parameters (see `candidateKeyFromParams` below) so a
+// stale report from a *previous* candidate is never shown as if it were
+// current.
+export const PHYSICS_STATUS = {
+  IDLE: "idle",
+  RUNNING: "running",
+  SUCCESS: "success",
+  ERROR: "error",
+};
+
 const SESSION_STORAGE_KEY = "exoplanet_prediction_session_v1";
+
+/** Stable identity for "which candidate was this physics report computed
+ * for" -- derived from the exact 17 submitted parameters (what the backend
+ * actually validated), not from the object_id alone, since object_id is
+ * optional/absent for a tabular-only session. */
+function candidateKeyFromParams(params) {
+  if (!params || typeof params !== "object") return null;
+  return JSON.stringify(params, Object.keys(params).sort());
+}
 
 /**
  * Persists only the two *completed-stage* outputs (light-curve analysis,
@@ -74,6 +94,12 @@ export function AnalysisProvider({ children }) {
   const [finalResult, setFinalResult] = useState(persisted.finalResult || null);
   const [finalError, setFinalError] = useState(null);
 
+  // ---- Stage 2: Physics Validation ----
+  const [physicsStatus, setPhysicsStatus] = useState(persisted.physicsResult ? PHYSICS_STATUS.SUCCESS : PHYSICS_STATUS.IDLE);
+  const [physicsResult, setPhysicsResult] = useState(persisted.physicsResult || null);
+  const [physicsError, setPhysicsError] = useState(null);
+  const [physicsCandidateKey, setPhysicsCandidateKey] = useState(persisted.physicsCandidateKey || null);
+
   const analyze = useCallback(async (file, objectId) => {
     setStatus(STATUS.UPLOADING);
     setProgress(0);
@@ -88,6 +114,10 @@ export function AnalysisProvider({ children }) {
     setFinalStatus(FINAL_STATUS.IDLE);
     setFinalResult(null);
     setFinalError(null);
+    setPhysicsStatus(PHYSICS_STATUS.IDLE);
+    setPhysicsResult(null);
+    setPhysicsError(null);
+    setPhysicsCandidateKey(null);
     clearPersistedSession();
 
     try {
@@ -115,7 +145,14 @@ export function AnalysisProvider({ children }) {
       setManualParameters(values);
       setFinalResult(body);
       setFinalStatus(FINAL_STATUS.SUCCESS);
-      persistSession({ manualParameters: values, finalResult: body });
+      // A new combined prediction is a new candidate -- any previous physics
+      // report was computed against *different* parameters and must not be
+      // shown as if it still applies.
+      setPhysicsStatus(PHYSICS_STATUS.IDLE);
+      setPhysicsResult(null);
+      setPhysicsError(null);
+      setPhysicsCandidateKey(null);
+      persistSession({ manualParameters: values, finalResult: body, physicsResult: null, physicsCandidateKey: null });
     } catch (err) {
       setFinalError(err);
       setFinalStatus(FINAL_STATUS.ERROR);
@@ -133,8 +170,38 @@ export function AnalysisProvider({ children }) {
     setManualParameters(values);
     setFinalResult(predictionBody);
     setFinalStatus(FINAL_STATUS.SUCCESS);
-    persistSession({ manualParameters: values, finalResult: predictionBody });
+    setPhysicsStatus(PHYSICS_STATUS.IDLE);
+    setPhysicsResult(null);
+    setPhysicsError(null);
+    setPhysicsCandidateKey(null);
+    persistSession({ manualParameters: values, finalResult: predictionBody, physicsResult: null, physicsCandidateKey: null });
   }, []);
+
+  /**
+   * Runs Stage 2 Physics Validation for the *current* candidate (the exact
+   * 17 parameters that produced `finalResult`). Safe to call repeatedly --
+   * if a matching report for this same candidate already succeeded (or is
+   * currently running), it is reused instead of firing a redundant request.
+   */
+  const startPhysicsValidation = useCallback(async (force = false) => {
+    if (!manualParameters) return;
+    const key = candidateKeyFromParams(manualParameters);
+    if (!force && key === physicsCandidateKey && (physicsStatus === PHYSICS_STATUS.SUCCESS || physicsStatus === PHYSICS_STATUS.RUNNING)) {
+      return;
+    }
+    setPhysicsCandidateKey(key);
+    setPhysicsStatus(PHYSICS_STATUS.RUNNING);
+    setPhysicsError(null);
+    try {
+      const body = await runPhysicsValidationApi(manualParameters, result?.object_id);
+      setPhysicsResult(body);
+      setPhysicsStatus(PHYSICS_STATUS.SUCCESS);
+      persistSession({ physicsResult: body, physicsCandidateKey: key });
+    } catch (err) {
+      setPhysicsError(err);
+      setPhysicsStatus(PHYSICS_STATUS.ERROR);
+    }
+  }, [manualParameters, result, physicsCandidateKey, physicsStatus]);
 
   const reset = useCallback(() => {
     setStatus(STATUS.EMPTY);
@@ -146,8 +213,19 @@ export function AnalysisProvider({ children }) {
     setFinalStatus(FINAL_STATUS.IDLE);
     setFinalResult(null);
     setFinalError(null);
+    setPhysicsStatus(PHYSICS_STATUS.IDLE);
+    setPhysicsResult(null);
+    setPhysicsError(null);
+    setPhysicsCandidateKey(null);
     clearPersistedSession();
   }, []);
+
+  // True only when physicsResult was actually computed for the candidate
+  // currently shown on the results page -- false after a new prediction
+  // replaces manualParameters, even if an older report is still in state
+  // for an instant during the transition.
+  const physicsResultIsCurrent = physicsCandidateKey !== null
+    && physicsCandidateKey === candidateKeyFromParams(manualParameters);
 
   return (
     <AnalysisContext.Provider
@@ -155,6 +233,8 @@ export function AnalysisProvider({ children }) {
         status, progress, result, error, filename, analyze, reset,
         manualParameters, finalStatus, finalResult, finalError, submitCombinedPrediction,
         acceptExtractedPrediction,
+        physicsStatus, physicsResult, physicsError, startPhysicsValidation,
+        physicsResultIsCurrent,
       }}
     >
       {children}

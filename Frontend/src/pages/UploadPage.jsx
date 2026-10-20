@@ -4,6 +4,7 @@ import CsvDropzone from "../components/CsvDropzone";
 import ProgressBar from "../components/ProgressBar";
 import StateBlock from "../components/StateBlock";
 import StepIndicator from "../components/StepIndicator";
+import Icon from "../components/Icon";
 import { useAnalysis, STATUS } from "../context/AnalysisContext";
 
 export default function UploadPage() {
@@ -32,7 +33,7 @@ export default function UploadPage() {
   }
 
   return (
-    <div className="fade-in">
+    <div className="fade-in upload-stage">
       <StepIndicator current={1} />
       <header className="page-header">
         <h1 className="page-title">Step 1 — Upload Light Curve</h1>
@@ -94,7 +95,7 @@ export default function UploadPage() {
           <div style={{ marginTop: 24 }}>
             <StateBlock
               variant="error"
-              icon="⚠️"
+              icon={<Icon name="error" size={32} />}
               title={error?.code || "Analysis failed"}
               description={error?.message || "Something went wrong while analyzing the file."}
               action={

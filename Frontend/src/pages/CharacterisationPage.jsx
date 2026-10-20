@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import StateBlock from "../components/StateBlock";
+import Icon from "../components/Icon";
 import { useAnalysis, STATUS } from "../context/AnalysisContext";
 
 export default function CharacterisationPage() {
@@ -19,7 +20,7 @@ export default function CharacterisationPage() {
       {status !== STATUS.SUCCESS || !result ? (
         <div className="panel">
           <StateBlock
-            icon="🔭"
+            icon={<Icon name="radar" size={32} />}
             title="Available after analysis"
             description="Upload a light curve to see vetting diagnostics here."
             action={

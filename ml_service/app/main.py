@@ -31,7 +31,7 @@ from app.feature_aliases import (
 )
 from app.logging_config import configure_logging
 from app.model_loader import ModelRegistry
-from app.routers import health, predict, predict_csv, predict_named, schema
+from app.routers import health, physics, predict, predict_csv, predict_named, schema
 
 logger = logging.getLogger("ml_service")
 
@@ -86,6 +86,7 @@ app.include_router(predict.router)
 app.include_router(predict_csv.router)
 app.include_router(predict_named.router)
 app.include_router(schema.router)
+app.include_router(physics.router)
 
 
 @app.middleware("http")

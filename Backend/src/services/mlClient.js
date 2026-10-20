@@ -138,6 +138,59 @@ async function forwardNamedPrediction(namedParams, requestId) {
   throw new MLServiceUnavailableError();
 }
 
+/**
+ * Forwards a named parameter body (the same shape as forwardNamedPrediction)
+ * to the ML service's POST /physics-validation endpoint. Unlike prediction,
+ * this endpoint never rejects a request merely because some fields are
+ * missing -- the ML service reports NOT_EVALUATED per-test instead -- so the
+ * only error paths here are transport-level (timeout/unavailable).
+ */
+async function forwardPhysicsValidation(namedParams, requestId) {
+  const maxAttempts = config.mlServiceMaxRetries + 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetchWithTimeout(
+        `${config.mlServiceUrl}/physics-validation`,
+        {
+          method: "POST",
+          body: JSON.stringify(namedParams),
+          headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+        },
+        config.mlServiceTimeoutMs
+      );
+    } catch (err) {
+      const isAbort = err.name === "AbortError";
+      if (attempt >= maxAttempts) {
+        logger.error(isAbort ? "ml_service_timeout" : "ml_service_unreachable", { request_id: requestId });
+        throw isAbort ? new MLServiceTimeoutError() : new MLServiceUnavailableError();
+      }
+      await sleep(config.mlServiceRetryBackoffMs * 2 ** (attempt - 1));
+      continue;
+    }
+
+    if (response.ok) {
+      return response.json();
+    }
+
+    if (response.status === 422 || response.status === 400) {
+      const body = await response.json().catch(() => null);
+      throw new UpstreamValidationError(response.status, body);
+    }
+
+    if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < maxAttempts) {
+      await sleep(config.mlServiceRetryBackoffMs * 2 ** (attempt - 1));
+      continue;
+    }
+
+    logger.error("ml_service_error", { request_id: requestId, status_code: response.status });
+    throw new MLServiceUnavailableError();
+  }
+
+  throw new MLServiceUnavailableError();
+}
+
 async function fetchFeatureSchema() {
   const response = await fetchWithTimeout(`${config.mlServiceUrl}/feature-schema`, { method: "GET" }, 5000);
   if (!response.ok) {
@@ -155,4 +208,10 @@ async function checkReady() {
   }
 }
 
-module.exports = { forwardCsvPrediction, forwardNamedPrediction, fetchFeatureSchema, checkReady };
+module.exports = {
+  forwardCsvPrediction,
+  forwardNamedPrediction,
+  forwardPhysicsValidation,
+  fetchFeatureSchema,
+  checkReady,
+};

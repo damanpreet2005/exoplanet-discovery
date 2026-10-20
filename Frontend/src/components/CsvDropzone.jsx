@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
+import Icon from "./Icon";
 
 export default function CsvDropzone({ onFileSelected, disabled }) {
   const [rejection, setRejection] = useState(null);
@@ -29,9 +30,7 @@ export default function CsvDropzone({ onFileSelected, disabled }) {
     <div>
       <div {...getRootProps()} className={"dropzone" + (isDragActive ? " active" : "")}>
         <input {...getInputProps()} />
-        <div className="dropzone-icon" aria-hidden="true">
-          🛸
-        </div>
+        <Icon name="upload_file" size={40} className="dropzone-icon" />
         <div className="dropzone-title">
           {isDragActive ? "Drop the CSV to begin analysis" : "Drag & drop an observational CSV here"}
         </div>

@@ -1,16 +1,25 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import ComingSoonPanel from "../components/ComingSoonPanel";
 import StepIndicator from "../components/StepIndicator";
-import { useAnalysis, STATUS, FINAL_STATUS } from "../context/AnalysisContext";
+import PhysicsStatusBadge from "../components/PhysicsStatusBadge";
+import Icon from "../components/Icon";
+import { useAnalysis, STATUS, FINAL_STATUS, PHYSICS_STATUS } from "../context/AnalysisContext";
 
 function pct(value) {
   return value === null || value === undefined ? "—" : `${(value * 100).toFixed(1)}%`;
 }
 
 export default function ResultsPage() {
-  const { status, result, finalStatus, finalResult, manualParameters, reset } = useAnalysis();
+  const {
+    status, result, finalStatus, finalResult, manualParameters, reset,
+    physicsStatus, physicsResult, physicsError, physicsResultIsCurrent, startPhysicsValidation,
+  } = useAnalysis();
   const navigate = useNavigate();
+
+  async function handleStartPhysicsValidation() {
+    await startPhysicsValidation();
+    navigate("/physics-validation");
+  }
 
   function handleNewPrediction() {
     // Clears the light curve, manual parameters, and final result (both in
@@ -64,7 +73,7 @@ export default function ResultsPage() {
           </p>
         </div>
         <button className="btn btn-ghost" onClick={handleNewPrediction}>
-          ↻ New Prediction
+          <Icon name="refresh" size={16} /> New Prediction
         </button>
       </header>
 
@@ -190,9 +199,46 @@ export default function ResultsPage() {
         </dl>
       </div>
 
-      <div className="panel">
-        <h3 style={{ marginTop: 0 }}>Physics Validation</h3>
-        <ComingSoonPanel title="Physics Validation" message={result.physics_validation.message} />
+      <div className="panel physics-teaser">
+        <div className="physics-teaser-header">
+          <div>
+            <h3 style={{ margin: "0 0 6px" }}>Physics Validation</h3>
+            <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", margin: 0, maxWidth: 560 }}>
+              Stage 2 independently checks this candidate's reported transit depth, transit duration, and orbital
+              configuration against standard physics -- separately from the classifier above. A promising
+              prediction does not by itself mean these physical checks pass.
+            </p>
+          </div>
+          {physicsResultIsCurrent && physicsResult && <PhysicsStatusBadge status={physicsResult.overall_status} size="lg" />}
+        </div>
+
+        {physicsStatus === PHYSICS_STATUS.ERROR && (
+          <p style={{ color: "var(--danger)", fontSize: "0.85rem" }}>
+            {physicsError?.message || "Physics validation failed. Try again."}
+          </p>
+        )}
+
+        <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+          <button
+            className="btn btn-primary"
+            onClick={handleStartPhysicsValidation}
+            disabled={physicsStatus === PHYSICS_STATUS.RUNNING}
+          >
+            {physicsStatus === PHYSICS_STATUS.RUNNING ? (
+              <>
+                <Icon name="progress_activity" size={16} className="icon-spin" /> Running Physics Validation…
+              </>
+            ) : physicsResultIsCurrent && physicsResult ? (
+              <>
+                View Physics Validation <Icon name="arrow_forward" size={16} />
+              </>
+            ) : (
+              <>
+                <Icon name="science" size={16} /> Start Physics Validation
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="panel">
@@ -230,7 +276,7 @@ export default function ResultsPage() {
 
       <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
         <button className="btn btn-primary" onClick={handleNewPrediction}>
-          ↻ Start a New Prediction
+          <Icon name="refresh" size={16} /> Start a New Prediction
         </button>
       </div>
     </div>

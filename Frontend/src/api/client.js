@@ -108,3 +108,22 @@ export async function submitManualParameters(namedParams) {
   }
   return body;
 }
+
+/**
+ * Stage 2: submits the candidate's named KOI parameters (plus an optional
+ * object_id, echoed back for display) to POST /api/v1/physics-validation
+ * and returns the real backend-computed report. Never fabricated client-side.
+ */
+export async function runPhysicsValidation(namedParams, objectId) {
+  const requestId = generateRequestId();
+  const response = await fetch(`${API_BASE_URL}/api/v1/physics-validation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+    body: JSON.stringify({ ...namedParams, object_id: objectId }),
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw body?.error || { code: "UNKNOWN_ERROR", message: "The physics validation request failed." };
+  }
+  return body;
+}
