@@ -40,7 +40,25 @@ services:
       context: ./Frontend
       args:
         - VITE_API_BASE_URL=${VITE_API_BASE_URL:-}
+    # Loopback only: public traffic arrives through the Cloudflare tunnel below.
     ports:
-      - "5500:5500"
+      - "127.0.0.1:5500:5500"
     depends_on:
       - backend
+
+  # Cloudflare named tunnel: outbound-only connection; routes exodiscovery.online
+  # and www to http://frontend:5500. Hostnames are managed in the Cloudflare
+  # dashboard. The token lives only in ./.env on the server (never committed):
+  #   EXO_TUNNEL_TOKEN=eyJ...
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.0
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --edge-ip-version 4 run
+    environment:
+      - TUNNEL_TOKEN=${EXO_TUNNEL_TOKEN:-}
+    depends_on:
+      - frontend
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
