@@ -29,6 +29,7 @@ from app.feature_aliases import (
     MissingFeatureError,
     RfFeatureContractError,
 )
+from app.koi_catalog import KoiCatalogUnavailableError, get_koi_catalog
 from app.logging_config import configure_logging
 from app.model_loader import ModelRegistry
 from app.routers import health, physics, predict, predict_csv, predict_named, schema
@@ -47,6 +48,12 @@ async def lifespan(app: FastAPI):
         app.state.model_registry.load()
     except Exception:
         logger.error("startup_model_load_failed")
+    # Warm the Object ID lookup index so a missing/broken catalogue is
+    # logged at boot. Not fatal: affected requests report `lookup_error`.
+    try:
+        get_koi_catalog()
+    except KoiCatalogUnavailableError:
+        pass
     yield
 
 

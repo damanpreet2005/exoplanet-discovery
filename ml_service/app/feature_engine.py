@@ -16,7 +16,7 @@ carrying:
             "derived_equilibrium_temperature", "structural_default").
   - status: one of "estimated" (measured from the light curve), "derived"
             (computed from other estimated/catalog values via a documented
-            formula), "catalog" (looked up live from the NASA Exoplanet Archive),
+            formula), "catalog" (looked up in the local NASA Exoplanet Archive KOI catalogue),
             or "unavailable" (deliberately not fabricated).
   - note:   a short, human-readable explanation of exactly how the value was
             produced, or exactly why it wasn't.
@@ -179,7 +179,7 @@ def extract_features(time: np.ndarray, flux: np.ndarray, object_id: str | None =
         if catalog.field_available.get(canonical):
             features[canonical] = FeatureValue(
                 catalog.fields[canonical], unit(canonical), "nasa_koi_catalog", STATUS_CATALOG,
-                f"Resolved live from the NASA Exoplanet Archive for {_target_description(catalog)}.",
+                f"Resolved from the local NASA Exoplanet Archive KOI catalogue for {_target_description(catalog)}.",
             )
         else:
             features[canonical] = FeatureValue(

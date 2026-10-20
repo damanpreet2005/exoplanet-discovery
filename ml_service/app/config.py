@@ -31,6 +31,14 @@ class Settings:
     csv_max_rows: int = int(os.getenv("CSV_MAX_ROWS", "1000"))
     csv_max_file_size_bytes: int = int(os.getenv("CSV_MAX_FILE_SIZE_BYTES", str(5 * 1024 * 1024)))
 
+    # Local snapshot of the NASA Exoplanet Archive KOI `cumulative` table --
+    # the source every Object ID lookup is resolved against (see
+    # app/koi_catalog.py). Resolves to ml_service/data/ on the host and
+    # /srv/data/ in the Docker image.
+    koi_catalog_path: str = os.getenv(
+        "KOI_CATALOG_PATH", str(SERVICE_ROOT / "data" / "koi_catalog.csv")
+    )
+
     # NASA Exoplanet Archive TAP (Table Access Protocol) sync endpoint --
     # the Archive's own supported programmatic interface, no API key
     # required. Configurable so a different mirror/environment can be

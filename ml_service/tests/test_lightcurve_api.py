@@ -9,28 +9,17 @@ TRUE_PERIOD = 5.0
 TRUE_DURATION_DAYS = 0.12
 TRUE_DEPTH = 0.01
 
-K00752_01 = {
-    "kepid": 10797460, "kepoi_name": "K00752.01", "kepler_name": "Kepler-227 b",
-    "koi_score": 1.0, "koi_tce_plnt_num": 1,
-    "koi_steff": 5455.0, "koi_slogg": 4.467, "koi_srad": 0.9270,
-    "ra": 291.934230, "dec": 48.141651, "koi_kepmag": 15.347,
-}
+# Catalogue lookups in this file are served by the real local KOI catalogue
+# (ml_service/data/koi_catalog.csv) -- e.g. K00752.01 is Kepler-227 b on
+# KIC 10797460; KIC 999999999 does not exist in it.
 
 
-@pytest.fixture(autouse=True)
-def fresh_cache_and_no_live_nasa(monkeypatch):
-    """Every test in this file gets an isolated NASA-lookup cache, and (by
-    default) an empty-result fake NASA client -- no test in this suite ever
-    depends on live NASA Exoplanet Archive availability. Tests that need a
-    real match call mock_nasa(...) themselves to override this default."""
-    monkeypatch.setattr(scs, "_cache", None)
-    monkeypatch.setattr(scs, "query_cumulative_table", lambda where_clause: [])
+def make_catalog_unavailable(monkeypatch):
+    from app.koi_catalog import KoiCatalogUnavailableError
 
-
-def mock_nasa(monkeypatch, rows_by_clause: dict[str, list[dict]]):
-    def fake_query_cumulative_table(where_clause: str) -> list[dict]:
-        return rows_by_clause.get(where_clause, [])
-    monkeypatch.setattr(scs, "query_cumulative_table", fake_query_cumulative_table)
+    def raise_unavailable():
+        raise KoiCatalogUnavailableError("KOI catalogue could not be opened")
+    monkeypatch.setattr(scs, "get_koi_catalog", raise_unavailable)
 
 
 def make_light_curve_csv(seed=0, n_points=3000, baseline_days=40.0):
@@ -153,7 +142,6 @@ def test_csv_with_valid_object_id_runs_the_real_prediction_with_zero_manual_entr
     """The primary workflow: CSV upload + Object ID -> automatic 17-feature
     extraction -> the real trained Random Forest + CNN ensemble, with no
     manual parameter entry at all."""
-    mock_nasa(monkeypatch, {"kepoi_name = 'K00752.01'": [K00752_01]})
     files = {"file": ("kepler_227b_like.csv", make_trapezoid_light_curve_csv(), "text/csv")}
     resp = client.post("/predict/csv", files=files, data={"object_id": "K00752.01"})
     assert resp.status_code == 200
@@ -190,37 +178,37 @@ def test_tic_object_id_is_rejected_not_silently_mismatched(client):
     assert body["prediction"] is None
 
 
-def test_nasa_timeout_returns_analysis_with_lookup_error_not_a_crash(client, monkeypatch):
-    from app.nasa_exoplanet_archive_client import NasaApiTimeoutError
-
-    def raise_timeout(where_clause):
-        raise NasaApiTimeoutError("timed out")
-    monkeypatch.setattr(scs, "query_cumulative_table", raise_timeout)
+def test_unavailable_catalogue_returns_analysis_with_lookup_error_not_a_crash(client, monkeypatch):
+    make_catalog_unavailable(monkeypatch)
 
     files = {"file": ("kepler_001.csv", make_light_curve_csv(), "text/csv")}
     resp = client.post("/predict/csv", files=files, data={"object_id": "KIC 10797460"})
     assert resp.status_code == 200
     body = resp.json()
+    # A catalogue that couldn't be read is never reported as "not found".
     assert body["catalog_resolution"]["match_status"] == "lookup_error"
+    assert "not a missing object" in body["catalog_resolution"]["note"]
     assert body["ready_for_prediction"] is False
     assert body["prediction"] is None
     assert body["features"]["koi_steff"]["status"] == "unavailable"
 
 
-def test_nasa_http_error_returns_analysis_with_lookup_error_not_a_crash(client, monkeypatch):
-    from app.nasa_exoplanet_archive_client import NasaApiHttpError
-
-    def raise_http_error(where_clause):
-        raise NasaApiHttpError(500, "internal error")
-    monkeypatch.setattr(scs, "query_cumulative_table", raise_http_error)
-
+def test_real_catalogue_record_with_blank_stellar_fields_reaches_the_api_response(client):
+    # K01046.01 (KIC 6209637) is a real record whose koi_steff/koi_slogg/
+    # koi_srad/koi_score are blank in the catalogue while ra/dec/koi_kepmag
+    # are present.
     files = {"file": ("kepler_001.csv", make_light_curve_csv(), "text/csv")}
-    resp = client.post("/predict/csv", files=files, data={"object_id": "KIC 10797460"})
+    resp = client.post("/predict/csv", files=files, data={"object_id": "K01046.01"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["catalog_resolution"]["match_status"] == "lookup_error"
+    assert body["catalog_resolution"]["match_status"] == "matched_koi"
+    assert body["catalog_resolution"]["matched_kepid"] == 6209637
+    assert body["features"]["koi_steff"]["status"] == "unavailable"
+    assert body["features"]["koi_steff"]["value"] is None
+    assert body["features"]["ra"]["status"] == "catalog"
+    assert body["features"]["ra"]["value"] == pytest.approx(293.28799)
+    assert body["features"]["koi_kepmag"]["value"] == pytest.approx(13.22)
     assert body["ready_for_prediction"] is False
-    assert body["prediction"] is None
 
 
 def test_missing_time_flux_columns_returns_422(client):
