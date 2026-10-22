@@ -18,7 +18,6 @@ import math
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from app.lightcurve_extraction import _phase, robust_point_noise, run_box_least_squares
@@ -115,12 +114,14 @@ def test_project_confirmed_planet_file():
     """Kepler-227 b test light curve (limb-darkened, 150 ppm, 29.4-min cadence):
     the previous value was 0.00432 (sigma = 1); with sigma = 150 ppm it is ~29,
     above Kepler's 7.1 detection threshold."""
-    d = pd.read_csv(REPO / "test_light_curves" / "1_confirmed_planet_Kepler-227b_KIC10797460.csv")
-    f = d.flux.values / np.median(d.flux.values)
-    bls = run_box_least_squares(d.time.values, f)
+    d = np.genfromtxt(REPO / "test_light_curves" / "1_confirmed_planet_Kepler-227b_KIC10797460.csv",
+                      delimiter=",", names=True)
+    time, flux = d["time"], d["flux"]
+    f = flux / np.median(flux)
+    bls = run_box_least_squares(time, f)
     assert bls.noise_ppm == pytest.approx(150, rel=0.05)
     assert 20 < bls.snr < 40
-    ref, _ = reference_snr(d.time.values, f, bls)
+    ref, _ = reference_snr(time, f, bls)
     assert bls.snr == pytest.approx(ref, rel=0.05)
     # The unit-weight value it used to report:
     assert bls.depth_fraction / math.sqrt(1 / bls.n_in_transit + 1 / (len(f) - bls.n_in_transit)) == \
