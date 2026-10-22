@@ -9,6 +9,7 @@ import TimingChart from "../components/charts/TimingChart";
 import RadiusScale from "../components/charts/RadiusScale";
 import OrbitSchematic from "../components/charts/OrbitSchematic";
 import TensionChart from "../components/charts/TensionChart";
+import PlanetPreview from "../components/charts/PlanetPreview";
 import {
   CLASSIFICATION_DISCLAIMER, ClassificationCard, PROVENANCE_LABELS, ParamDetailsTable, ParamList,
   ProvenanceChip, ReliabilityTag, StatusChip, isComputed, paramText,
@@ -195,6 +196,9 @@ function Insights({ report, physicsResult, physicsResultIsCurrent }) {
   const computedClasses = (report.classifications || []).filter((c) => c.status === "computed");
   return (
     <aside className="ws-insights" aria-label="Insights" data-testid="char-insights">
+      <div className="insight-block insight-planet">
+        <PlanetPreview report={report} />
+      </div>
       <div className="insight-block">
         <h4>Key findings</h4>
         {computedClasses.length ? (

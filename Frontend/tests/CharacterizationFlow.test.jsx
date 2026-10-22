@@ -337,3 +337,36 @@ describe("Light-curve chart hover", () => {
     expect(screen.getByRole("status")).toHaveTextContent(`${folded.phase_hours[target] >= 0 ? "+" : ""}${folded.phase_hours[target].toFixed(2)} h`);
   });
 });
+
+describe("Illustrative planet above Key findings", () => {
+  test("maps the engine's composition category to an archetype, labelled as illustrative", async () => {
+    const { planetArchetype } = await import("../src/components/charts/PlanetPreview");
+    expect(planetArchetype(REPORT).key).toBe("subneptune");           // fixture: Volatile-rich sub-Neptune candidate
+    const as = (category) => ({ classifications: [{ name: "composition_candidate", status: "computed", category }] });
+    expect(planetArchetype(as("Rocky / terrestrial candidate")).key).toBe("rocky");
+    expect(planetArchetype(as("Neptune-like (ice/gas giant) candidate")).key).toBe("neptune");
+    expect(planetArchetype(as("Gas-giant candidate")).key).toBe("giant");
+    // Never drawn without a computed category, or for an object too large to be a planet.
+    expect(planetArchetype({ classifications: [] }).key).toBeNull();
+    expect(planetArchetype({ classifications: [
+      { name: "size_category", status: "computed", category: "Exceeds planetary radii (~2 R_Jup): likely stellar companion" },
+      { name: "composition_candidate", status: "computed", category: "Gas-giant candidate" },
+    ] }).key).toBeNull();
+  });
+
+  test("renders above Key findings with its basis stated", async () => {
+    seedSession();
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: "Planet Characterization" }));
+    const insights = await screen.findByTestId("char-insights");
+    const preview = within(insights).getByTestId("planet-preview");
+    expect(preview).toHaveTextContent("Sub-Neptune");
+    expect(preview).toHaveTextContent(/Illustrative only.*not an image of the planet/);
+    expect(within(preview).getByRole("img", { name: /Illustration of a sub-neptune/i })).toBeInTheDocument();
+    // It sits before the Key findings block.
+    const blocks = insights.querySelectorAll(".insight-block");
+    expect(blocks[0]).toContainElement(preview);
+    expect(blocks[1]).toHaveTextContent("Key findings");
+  });
+});

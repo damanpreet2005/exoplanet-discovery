@@ -6,7 +6,8 @@ import Icon from "./Icon";
 // A floating, collapsible navigation dock (not an edge-attached sidebar --
 // see .dock in index.css). Collapsed to icons-only at rest; hovering (or,
 // for keyboard users, focusing into it) expands it to reveal labels via a
-// pure-CSS width transition (:hover / :focus-within on .dock), so no
+// pure-CSS width transition (:hover / :has(:focus-visible) on .dock -- keyboard
+// focus expands it, the focus left by a mouse click does not), so no
 // JS-driven expand/collapse state is needed for desktop/keyboard. Touch
 // devices (no hover) get a permanently-expanded dock instead of a fragile
 // tap-to-toggle gesture -- see the `(hover: none)` media query in index.css.

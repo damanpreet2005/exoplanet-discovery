@@ -174,8 +174,10 @@ h4 {
   transition: width 240ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* :focus-visible (not :focus-within) so keyboard focus expands the dock but
+   the focus a mouse click leaves on a link does not keep it open. */
 .dock:hover .dock-panel,
-.dock:focus-within .dock-panel {
+.dock:has(:focus-visible) .dock-panel {
   width: var(--dock-width-expanded);
 }
 
@@ -277,7 +279,7 @@ h4 {
 }
 
 .dock:hover .dock-label,
-.dock:focus-within .dock-label {
+.dock:has(:focus-visible) .dock-label {
   opacity: 1;
   transform: translateX(0);
 }
@@ -3731,4 +3733,70 @@ summary:focus-visible {
   color: var(--warning);
   background: color-mix(in srgb, var(--color-warning) 7%, transparent);
   border-top: 1px solid var(--border-subtle);
+}
+
+/* Illustrative planet above Key findings (insights column). */
+.insight-planet {
+  display: flex;
+  justify-content: center;
+  padding-top: 18px;
+  background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--color-accent-secondary) 10%, transparent), transparent 70%);
+}
+
+.planet-preview {
+  margin: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.planet-preview canvas {
+  width: min(180px, 100%);
+  height: auto;
+  aspect-ratio: 1;
+  display: block;
+}
+
+.planet-preview figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.78rem;
+}
+
+.planet-preview figcaption span {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.planet-preview figcaption em {
+  font-style: normal;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  max-width: 210px;
+}
+
+.planet-preview.is-empty {
+  flex-direction: row;
+  align-items: flex-start;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.planet-preview.is-empty p {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+/* When the insights panel moves below the workspace (narrow screens) it
+   becomes a grid; keep the planet a compact block there too. */
+@media (max-width: 1360px) {
+  .planet-preview canvas {
+    width: min(150px, 100%);
+  }
 }
