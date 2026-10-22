@@ -15,7 +15,10 @@ import torch
 from app.cache import Cache, make_cache_key
 from app.model_loader import ModelBundle
 from app.preprocessing import scale_features
-from app.schemas import FusionWeights, PredictionFeatures, PredictionResponse
+from app.feature_aliases import MODEL_FEATURE_ORDER
+from app.schemas import CatalogDependence, FusionWeights, PredictionFeatures, PredictionResponse
+
+KOI_SCORE_INDEX = MODEL_FEATURE_ORDER.index("koi_score")
 
 
 class FusionResult:
@@ -66,6 +69,7 @@ async def predict(bundle: ModelBundle, features: PredictionFeatures,
         _run_inference_sync, bundle, features, rf_weight, cnn_weight
     )
     duration = time.perf_counter() - start
+    dependence = await asyncio.to_thread(_catalog_dependence, bundle, features, rf_weight, cnn_weight)
 
     response = PredictionResponse(
         prediction=result.prediction,
@@ -74,8 +78,27 @@ async def predict(bundle: ModelBundle, features: PredictionFeatures,
         cnn_probability=result.cnn_probability,
         weights=FusionWeights(random_forest=rf_weight, cnn=cnn_weight),
         model_version=model_version,
+        catalog_dependence=dependence,
     )
     return response, duration
+
+
+def _catalog_dependence(bundle: ModelBundle, features: PredictionFeatures,
+                        rf_weight: float, cnn_weight: float) -> CatalogDependence | None:
+    """Re-evaluates the same inputs with koi_score set to its training median,
+    so the response can show how much the probability depends on it."""
+    names = list(PredictionFeatures.model_fields)
+    try:
+        neutral = float(bundle.scaler.center_[KOI_SCORE_INDEX])
+        importance = float(bundle.random_forest.feature_importances_[KOI_SCORE_INDEX])
+    except (AttributeError, IndexError):
+        return None
+    values = features.model_dump()
+    original = float(values[names[KOI_SCORE_INDEX]])
+    values[names[KOI_SCORE_INDEX]] = neutral
+    alt = _run_inference_sync(bundle, PredictionFeatures(**values), rf_weight, cnn_weight)
+    return CatalogDependence(value=original, rf_importance=importance, neutral_value=neutral,
+                             weighted_probability_with_neutral_value=alt.weighted_probability)
 
 
 async def predict_with_cache(bundle: ModelBundle, cache: Cache, features: PredictionFeatures,

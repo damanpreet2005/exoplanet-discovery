@@ -169,16 +169,18 @@ class TestNoTransitDoesNotManufactureConfidentDetection:
         assert result.features["koi_model_snr"].status == "estimated"
         assert result.features["koi_model_snr"].value is not None
 
-    def test_constant_flux_reports_honest_zero_depth_and_snr(self):
+    def test_constant_flux_reports_honest_zero_depth_and_undefined_snr(self):
         # No injected transit at all: the extractor must not manufacture a
-        # confident non-zero detection -- BLS still returns its best trial
-        # (there is always a "best" of however many trials it tried), but
-        # with truthfully zero depth/SNR rather than an invented signal.
+        # confident non-zero detection -- BLS still returns its best trial,
+        # with truthfully zero depth. The SNR is depth / noise, and perfectly
+        # constant flux has zero noise, so the ratio is undefined: it is
+        # reported as unavailable, never as an invented 0 (or infinity).
         time = np.linspace(0, 40, 3000)
         flux = np.ones_like(time)
         result = extract_features(time, flux, None)
         assert result.features["koi_depth"].value == pytest.approx(0.0, abs=1e-9)
-        assert result.features["koi_model_snr"].value == pytest.approx(0.0, abs=1e-9)
+        assert result.features["koi_model_snr"].status == "unavailable"
+        assert result.features["koi_model_snr"].value is None
 
 
 class TestEdgeCases:

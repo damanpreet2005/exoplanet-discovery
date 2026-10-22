@@ -44,24 +44,24 @@ beforeEach(() => {
 describe("ResultsPage 'New Prediction' reset", () => {
   test("a completed session renders the Results page directly (no redirect)", async () => {
     render(<App />);
-    const resultsLink = screen.getByRole("link", { name: /Results/i });
+    const resultsLink = screen.getByRole("link", { name: "Detection & Prediction" });
     fireEvent.click(resultsLink);
-    expect(await screen.findByRole("heading", { name: /Step 3.*Prediction Results/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Transit Detection & ML Prediction/i })).toBeInTheDocument();
     expect(screen.getByText("Predicted class")).toBeInTheDocument();
   });
 
   test("clicking New Prediction clears the session and returns to Page 1", async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: /Results/i }));
-    await screen.findByRole("heading", { name: /Step 3.*Prediction Results/i });
+    fireEvent.click(screen.getByRole("link", { name: "Detection & Prediction" }));
+    await screen.findByRole("heading", { name: /Transit Detection & ML Prediction/i });
 
     fireEvent.click(screen.getAllByRole("button", { name: /New Prediction/i })[0]);
 
-    expect(await screen.findByRole("heading", { name: /Step 1.*Upload Light Curve/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^Upload Light Curve$/i })).toBeInTheDocument();
     expect(window.sessionStorage.getItem(SESSION_KEY)).toBeNull();
 
     // And the cleared session actually redirects away from Results again.
-    fireEvent.click(screen.getByRole("link", { name: /Results/i }));
-    expect(await screen.findByRole("heading", { name: /Step 1.*Upload Light Curve/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Detection & Prediction" }));
+    expect(await screen.findByRole("heading", { name: /^Upload Light Curve$/i })).toBeInTheDocument();
   });
 });

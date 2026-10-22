@@ -49,6 +49,10 @@ class Settings:
     nasa_api_timeout_seconds: float = float(os.getenv("NASA_API_TIMEOUT_SECONDS", "8"))
     nasa_cache_ttl_seconds: int = int(os.getenv("NASA_CACHE_TTL_SECONDS", "3600"))
     nasa_cache_max_size: int = int(os.getenv("NASA_CACHE_MAX_SIZE", "512"))
+    # Planet characterization fills metallicity, distance and measured planet
+    # masses from the Archive (Kepler DR25 stellar table, confirmed planets).
+    # Failures leave those values unavailable; set to 0 to run fully offline.
+    characterization_archive_lookup: bool = os.getenv("CHARACTERIZATION_ARCHIVE_LOOKUP", "1") != "0"
 
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 

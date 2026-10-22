@@ -73,10 +73,36 @@ def query_cumulative_table(where_clause: str) -> list[dict]:
     (digits, or the canonical KOI/Kepler-name forms this codebase itself
     constructs) -- never the raw user-supplied Object ID string directly.
     """
-    settings = get_settings()
     select_clause = ", ".join(FIELDS)
-    adql = f"select {select_clause} from cumulative where {where_clause}"
+    return run_adql(f"select {select_clause} from cumulative where {where_clause}", where_clause)
 
+
+# Kepler DR25 stellar properties (the catalogue the local KOI table's stellar
+# values come from) and the confirmed-planet composite table -- only the
+# columns the characterization engine fills in from them.
+STELLAR_PROPERTY_FIELDS = ("kepid", "feh", "feh_err1", "feh_err2", "dist", "dist_err1", "dist_err2",
+                           "mass", "mass_err1", "mass_err2", "prov_sec", "radius", "logg", "teff")
+CONFIRMED_PLANET_FIELDS = ("pl_name", "pl_orbper", "pl_bmasse", "pl_bmasseerr1", "pl_bmasseerr2", "pl_bmassprov",
+                           "sy_dist", "sy_disterr1", "sy_disterr2")
+
+
+def query_dr25_stellar(kepid: int) -> list[dict]:
+    """Kepler Q1-Q17 DR25 stellar row(s) for one KIC star."""
+    return run_adql(f"select {', '.join(STELLAR_PROPERTY_FIELDS)} from q1_q17_dr25_ks where kepid = {int(kepid)}",
+                    f"kepid = {int(kepid)}")
+
+
+def query_confirmed_planet(pl_name: str) -> list[dict]:
+    """Confirmed-planet composite row for one planet name (e.g. 'Kepler-227 b')."""
+    safe = pl_name.replace("'", "''")
+    return run_adql(f"select {', '.join(CONFIRMED_PLANET_FIELDS)} from pscomppars where pl_name = '{safe}'",
+                    f"pl_name = '{safe}'")
+
+
+def run_adql(adql: str, where_clause: str = "") -> list[dict]:
+    """Runs one ADQL query against the Archive's TAP sync endpoint and
+    returns the raw JSON rows, raising a typed NasaApiError on failure."""
+    settings = get_settings()
     logger.info("nasa_api_query_started", extra={"where_clause": where_clause})
     try:
         response = httpx.get(

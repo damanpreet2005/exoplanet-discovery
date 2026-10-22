@@ -4,6 +4,7 @@ import StateBlock from "../components/StateBlock";
 import PhysicsStatusBadge from "../components/PhysicsStatusBadge";
 import PhysicsTestCard from "../components/PhysicsTestCard";
 import Icon from "../components/Icon";
+import StageNav from "../components/StageNav";
 import { useAnalysis, FINAL_STATUS, PHYSICS_STATUS } from "../context/AnalysisContext";
 
 export default function PhysicsPage() {
@@ -32,18 +33,20 @@ export default function PhysicsPage() {
 
   return (
     <div className="fade-in">
-      <header className="page-header physics-dashboard-header">
+      <header className="analysis-header">
         <div>
           <h1 className="page-title">Physics Validation</h1>
+          <div className="analysis-meta">
+            <span className="meta-chip"><Icon name="target" size={15} /> {result?.object_id || "No object ID on this session"}</span>
+            {showDashboard && <PhysicsStatusBadge status={physicsResult.overall_status} />}
+          </div>
           <p className="page-subtitle">
-            Candidate {result?.object_id ? <strong>{result.object_id}</strong> : "(no object ID on this session)"}
-            {" — "}three independent physical-plausibility checks of the candidate's reported transit and orbital
+            Three independent physical-plausibility checks of the candidate's reported transit and orbital
             geometry, run separately from the Random Forest + CNN classification. A promising classifier
             prediction does not by itself mean these checks pass.
           </p>
         </div>
-        <div className="physics-header-actions">
-          {showDashboard && <PhysicsStatusBadge status={physicsResult.overall_status} size="lg" />}
+        <div className="analysis-actions">
           <Link to="/results" className="btn btn-ghost">
             <Icon name="arrow_back" size={16} /> Back to Results
           </Link>
@@ -112,9 +115,11 @@ export default function PhysicsPage() {
             </div>
           </div>
 
-          {physicsResult.tests.map((test) => (
-            <PhysicsTestCard key={test.test_id} test={test} />
-          ))}
+          <div className="physics-stages">
+            {physicsResult.tests.map((test) => (
+              <PhysicsTestCard key={test.test_id} test={test} />
+            ))}
+          </div>
 
           <div className="panel">
             <h3 style={{ marginTop: 0 }}>Issues & Recommendations</h3>
@@ -143,12 +148,11 @@ export default function PhysicsPage() {
             <button className="btn btn-ghost" onClick={() => startPhysicsValidation(true)}>
               <Icon name="refresh" size={16} /> Re-run Validation
             </button>
-            <Link to="/results" className="btn btn-primary">
-              <Icon name="arrow_back" size={16} /> Back to Results
-            </Link>
           </div>
         </>
       )}
+
+      <StageNav current="/physics-validation" />
     </div>
   );
 }

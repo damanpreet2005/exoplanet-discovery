@@ -31,7 +31,7 @@ const CATEGORY_BY_CANONICAL = {
   dec: "Sky Position",
 };
 
-function groupFeatures(features) {
+export function groupFeatures(features) {
   const byCategory = new Map();
   for (const feature of features) {
     const category = CATEGORY_BY_CANONICAL[feature.canonical] || "Other Parameters";

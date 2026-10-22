@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import CsvDropzone from "../components/CsvDropzone";
 import ProgressBar from "../components/ProgressBar";
 import StateBlock from "../components/StateBlock";
-import StepIndicator from "../components/StepIndicator";
 import Icon from "../components/Icon";
 import { useAnalysis, STATUS } from "../context/AnalysisContext";
 
@@ -34,9 +33,8 @@ export default function UploadPage() {
 
   return (
     <div className="fade-in upload-stage">
-      <StepIndicator current={1} />
       <header className="page-header">
-        <h1 className="page-title">Step 1 — Upload Light Curve</h1>
+        <h1 className="page-title">Upload Light Curve</h1>
         <p className="page-subtitle">
           Upload a CSV with only <strong>time</strong> and <strong>flux</strong> (or{" "}
           <strong>brightness</strong>) columns, together with the object's catalog Object ID. The

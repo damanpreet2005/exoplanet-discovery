@@ -43,7 +43,6 @@ from app.feature_aliases import FEATURE_DEFINITIONS, MODEL_FEATURE_ORDER
 from app.lightcurve_extraction import (
     LightCurveExtraction,
     compute_feature_vector,
-    estimate_impact_parameter,
 )
 from app.stellar_catalog_service import CatalogResolution, KOI_LEVEL_FIELDS, resolve_object_id
 
@@ -76,6 +75,52 @@ class FeatureExtractionResult:
     warnings: list[str] = field(default_factory=list)
 
 
+PERIOD_MATCH_TOLERANCE = 0.01
+
+
+def _catalog_koi_value(catalog: CatalogResolution, column: str, period_days: float) -> float | None:
+    """A KOI-level catalogue column for the KOI this light curve's transit
+    belongs to: the single matched KOI, or -- for a star with several KOIs --
+    the one whose catalogue period matches the light-curve period within 1%."""
+    rows = list(catalog.matched_rows or [])
+    if len(rows) > 1:
+        rows = [r for r in rows if _finite(r.get("koi_period")) and period_days
+                and abs(float(r["koi_period"]) / period_days - 1) < PERIOD_MATCH_TOLERANCE]
+    if len(rows) != 1 or catalog.match_status not in ("matched_koi", "matched_star"):
+        return None
+    raw = rows[0].get(column)
+    return float(raw) if _finite(raw) else None
+
+
+def _finite(raw) -> bool:
+    try:
+        return math.isfinite(float(raw))
+    except (TypeError, ValueError):
+        return False
+
+
+def apply_fitted_impact_parameter(result: "FeatureExtractionResult", report: dict | None) -> None:
+    """Fills an unavailable koi_impact from the characterization engine's
+    transit fit, but only when that fit used the catalogue stellar-density
+    prior and the engine rates the fitted b as reliable -- never a guess.
+    Updates `missing_features` / `ready_for_prediction` accordingly."""
+    if result.features["koi_impact"].status != STATUS_UNAVAILABLE or not report:
+        return
+    b = (report.get("parameters") or {}).get("impact_parameter") or {}
+    fit = report.get("transit_fit") or {}
+    prior_used = bool(((report.get("inputs") or {}).get("transit_fit") or {}).get("stellar_density_prior"))
+    if b.get("status") != "computed" or b.get("reliability") != "reliable" or b.get("provenance") != "fitted" \
+            or not prior_used or fit.get("status") != "fitted":
+        return
+    result.features["koi_impact"] = FeatureValue(
+        b["value"], FEATURE_UNITS.get("koi_impact", ""), "transit_model_fit", STATUS_ESTIMATED,
+        f"Limb-darkened transit-model fit of the uploaded light curve with the catalogue stellar density as a "
+        f"prior on a/R* (b = {b['display']}).",
+    )
+    result.missing_features = [c for c, fv in result.features.items() if fv.status == STATUS_UNAVAILABLE]
+    result.ready_for_prediction = not result.missing_features
+
+
 def _unavailable_reason(catalog: CatalogResolution, canonical: str) -> str:
     if catalog.match_status in ("not_provided", "not_found", "unsupported_identifier_type", "lookup_error"):
         return catalog.note
@@ -98,8 +143,6 @@ def extract_features(time: np.ndarray, flux: np.ndarray, object_id: str | None =
 
     extraction = compute_feature_vector(time, flux)  # existing, unmodified BLS + vetting-stats pipeline
     bls = extraction.bls
-    normalized_flux = flux / np.median(flux)
-    impact = estimate_impact_parameter(time, normalized_flux, bls)
 
     logger.info("catalog_lookup_started")
     catalog = resolve_object_id(object_id)
@@ -132,19 +175,45 @@ def extract_features(time: np.ndarray, flux: np.ndarray, object_id: str | None =
         bls.depth_ppm, unit("koi_depth"), "box_least_squares", STATUS_ESTIMATED,
         "BLS best-fit transit depth, converted from a flux fraction to parts per million.",
     )
-    features["koi_model_snr"] = FeatureValue(
-        bls.snr, unit("koi_model_snr"), "box_least_squares", STATUS_ESTIMATED,
-        "BLS transit depth signal-to-noise ratio (periodogram depth_snr at the best-fit period).",
-    )
+    # Same definition family as the KOI table's koi_model_snr (transit depth
+    # over the flux uncertainty, combined over the observed transits).
+    if bls.snr is not None:
+        features["koi_model_snr"] = FeatureValue(
+            bls.snr, unit("koi_model_snr"), "box_least_squares", STATUS_ESTIMATED,
+            f"BLS box-depth SNR, all transits combined: depth / (sigma sqrt(1/N_in + 1/N_out)) with "
+            f"N_in = {bls.n_in_transit} in-transit points and sigma = {bls.noise_ppm:.0f} ppm (robust "
+            "point-to-point scatter). Assumes white noise.",
+        )
+    else:
+        features["koi_model_snr"] = FeatureValue(
+            None, unit("koi_model_snr"), "box_least_squares", STATUS_UNAVAILABLE,
+            "The per-point photometric noise could not be estimated from this light curve (e.g. constant or "
+            "quantised flux), so a signal-to-noise ratio is undefined.",
+        )
 
-    # ---- A (potentially). transit shape -> impact parameter ---------------
-    if impact.available:
+    # ---- A (potentially). impact parameter ---------------------------------
+    # KOI catalogue value (NASA's own transit-model fit of the full Kepler
+    # data) when the Object ID matched this KOI; otherwise unavailable here,
+    # and routers/predict_csv.py fills it from the characterization engine's
+    # density-constrained, limb-darkened transit fit when that rates b as
+    # reliable (apply_fitted_impact_parameter). The trapezoid shape estimate
+    # (estimate_impact_parameter) is no longer used: it assumes no limb
+    # darkening, so on real (limb-darkened) stars the curved transit bottom
+    # makes T23 too short and drives b towards 1 -- it reported b = 0.96 for
+    # Kepler-227 b (catalogue b = 0.146).
+    catalog_impact = _catalog_koi_value(catalog, "koi_impact", bls.period_days)
+    if catalog_impact is not None:
         features["koi_impact"] = FeatureValue(
-            impact.value, unit("koi_impact"), "transit_shape_fit", STATUS_ESTIMATED, impact.note,
+            catalog_impact, unit("koi_impact"), "nasa_koi_catalog", STATUS_CATALOG,
+            f"KOI catalogue impact parameter for {_target_description(catalog)} (NASA transit-model fit of the "
+            "full Kepler light curve); preferred over a shape estimate from the uploaded light curve, which "
+            "cannot resolve the ingress of small planets at long cadence.",
         )
     else:
         features["koi_impact"] = FeatureValue(
-            None, unit("koi_impact"), "transit_shape_fit", STATUS_UNAVAILABLE, impact.note,
+            None, unit("koi_impact"), "transit_model_fit", STATUS_UNAVAILABLE,
+            "No KOI catalogue impact parameter for this target, and the light curve's transit shape alone does "
+            "not constrain it without a stellar-density prior (b is degenerate with a/R*).",
         )
 
     # ---- D. catalog/TCE-specific fields ------------------------------------

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ManualParamForm from "../components/ManualParamForm";
 import StateBlock from "../components/StateBlock";
-import StepIndicator from "../components/StepIndicator";
 import Icon from "../components/Icon";
 import { fetchFeatureSchema } from "../api/client";
 import { useAnalysis, STATUS, FINAL_STATUS } from "../context/AnalysisContext";
@@ -147,7 +146,6 @@ export default function ManualParamsPage() {
   if (result.ready_for_prediction && result.prediction) {
     return (
       <div className="fade-in">
-        <StepIndicator current={2} />
         <div className="panel">
           <StateBlock icon={<Icon name="auto_awesome" size={32} />} title="All 17 parameters resolved automatically" description="Running the trained model — you're being taken straight to your results." />
         </div>
@@ -157,9 +155,8 @@ export default function ManualParamsPage() {
 
   return (
     <div className="fade-in">
-      <StepIndicator current={2} />
       <header className="page-header">
-        <h1 className="page-title">Step 2 — Complete the Remaining Parameters</h1>
+        <h1 className="page-title">Complete the Remaining Parameters</h1>
         <p className="page-subtitle">
           {hasRichFeatureReport && missingFeatures.size > 0
             ? `${schemaState.features.length - missingFeatures.size} of ${schemaState.features.length} model parameters were resolved automatically (from your light curve and/or a catalog lookup) and are locked below. Only the ${missingFeatures.size} field(s) marked "unavailable" need manual entry.`

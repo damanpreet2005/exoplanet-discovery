@@ -82,7 +82,15 @@ class LightCurveDiagnostics(BaseModel):
     bls_period_days: float
     bls_duration_hours: float
     bls_depth_ppm: float
-    bls_transit_snr: float
+    bls_transit_snr: float | None = Field(
+        description="BLS box-depth signal-to-noise ratio of the best transit box, all transits combined: "
+                    "depth / (sigma sqrt(1/N_in + 1/N_out)), sigma = robust per-point white noise. "
+                    "Dimensionless; null when sigma cannot be estimated. Not BLS power and not SDE."
+    )
+    bls_noise_ppm: float | None = Field(default=None, description="Per-point white noise sigma used for the SNR (ppm).")
+    bls_n_in_transit: int | None = Field(default=None, description="Points inside the best transit box, all transits.")
+    bls_sde: float | None = Field(default=None, description="Signal Detection Efficiency of the BLS periodogram peak "
+                                                             "(peak above mean power, in units of its scatter). Not an SNR.")
     num_transits_observed: int
 
 
@@ -97,7 +105,15 @@ class CharacterisationResult(BaseModel):
     bls_period_days: float
     bls_duration_hours: float
     bls_depth_ppm: float
-    bls_transit_snr: float
+    bls_transit_snr: float | None = Field(
+        description="BLS box-depth signal-to-noise ratio of the best transit box, all transits combined: "
+                    "depth / (sigma sqrt(1/N_in + 1/N_out)), sigma = robust per-point white noise. "
+                    "Dimensionless; null when sigma cannot be estimated. Not BLS power and not SDE."
+    )
+    bls_noise_ppm: float | None = Field(default=None, description="Per-point white noise sigma used for the SNR (ppm).")
+    bls_n_in_transit: int | None = Field(default=None, description="Points inside the best transit box, all transits.")
+    bls_sde: float | None = Field(default=None, description="Signal Detection Efficiency of the BLS periodogram peak "
+                                                             "(peak above mean power, in units of its scatter). Not an SNR.")
     num_transits_observed: int
     odd_even_depth_ratio: float = Field(
         description="Depth(even transits)/depth(odd transits); far from 1.0 suggests an eclipsing binary"
@@ -126,6 +142,21 @@ class FeatureValueModel(BaseModel):
     note: str
 
 
+class CatalogDependence(BaseModel):
+    """How much of the prediction rests on `koi_score`, NASA's Robovetter
+    disposition score from the KOI catalogue. In the KOI table it alone
+    reproduces the catalogue disposition for ~98% of KOIs, so a prediction
+    driven by it restates NASA's vetting rather than adding independent
+    evidence from the uploaded light curve. This is a sensitivity diagnostic,
+    not an alternative prediction."""
+    feature: str = "koi_score"
+    value: float = Field(description="koi_score supplied to the model")
+    rf_importance: float = Field(description="Share of the Random Forest's impurity-based feature importance")
+    neutral_value: float = Field(description="Training median of koi_score (the scaler's centre)")
+    weighted_probability_with_neutral_value: float = Field(
+        description="Ensemble P(class 1) with koi_score replaced by its training median, all else unchanged")
+
+
 class PredictionResponse(BaseModel):
     prediction: int = Field(description="Predicted class label (0 or 1). Class semantics "
                                          "(e.g. which label means 'candidate') are not "
@@ -135,6 +166,7 @@ class PredictionResponse(BaseModel):
     cnn_probability: float
     weights: FusionWeights
     model_version: str
+    catalog_dependence: CatalogDependence | None = None
     request_id: str | None = None
     cache_hit: bool = False
 
@@ -142,7 +174,7 @@ class PredictionResponse(BaseModel):
 class CatalogResolutionModel(BaseModel):
     requested_identifier: str | None
     identifier_type: str = Field(
-        description="'kic' | 'koi_name' | 'kepler_name' | 'tic' | 'unrecognized' | 'none'"
+        description="'kic' | 'koi_name' | 'kepler_name' | 'tce' | 'tic' | 'unrecognized' | 'none'"
     )
     match_status: str = Field(
         description="'not_provided' | 'not_found' | 'unsupported_identifier_type' | 'lookup_error' | "
@@ -178,7 +210,7 @@ class LightCurveAnalysisResponse(BaseModel):
     dataset_type: str = "light_curve"
     filename: str
     diagnostics: LightCurveDiagnostics
-    extracted_features: dict[str, float]
+    extracted_features: dict[str, float | None]
     suggested_parameters: dict[str, float] = Field(
         description="Best-effort estimates for the subset of the 17 model features "
                      "derivable from a light curve (koi_period, koi_time0bk, "
@@ -209,6 +241,14 @@ class LightCurveAnalysisResponse(BaseModel):
     )
     prediction: PredictionResponse | None = Field(
         default=None, description="The actual trained-model prediction, present only when ready_for_prediction is true.",
+    )
+    characterization: dict | None = Field(
+        default=None,
+        description="Planet Characterization Engine report (app/characterization): physical, orbital and stellar "
+                    "parameters with value/unit/provenance/uncertainty/reliability, classifications, transit-fit "
+                    "diagnostics, transit timing, assumptions, missing-input explanations and warnings. Includes "
+                    "an `inputs` snapshot accepted by POST /characterization/recompute. Separate from the 17 ML "
+                    "features in `features`.",
     )
 
 

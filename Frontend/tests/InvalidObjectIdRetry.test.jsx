@@ -61,14 +61,14 @@ describe("invalid Object ID -> 'Wrong Input? Try Again'", () => {
 
     fireEvent.click(retryButton);
 
-    expect(await screen.findByRole("heading", { name: /Step 1.*Upload Light Curve/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^Upload Light Curve$/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/Object ID/i)).toHaveValue("");
     expect(window.sessionStorage.getItem(SESSION_KEY)).toBeNull();
 
     // The stale not-found session must actually be gone, not just hidden --
     // navigating back to Manual Parameters should bounce to Step 1 again.
     fireEvent.click(screen.getByRole("link", { name: /Manual Parameters/i }));
-    expect(await screen.findByRole("heading", { name: /Step 1.*Upload Light Curve/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^Upload Light Curve$/i })).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(`Stellar information unavailable for Object ID ${INVALID_OBJECT_ID}`))).not.toBeInTheDocument();
   });
 });

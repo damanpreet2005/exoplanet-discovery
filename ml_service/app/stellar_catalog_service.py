@@ -21,7 +21,9 @@ IDENTIFIER TYPES -- this deployment's trained model was fit on Kepler KOI
 data (see app/feature_aliases.py's provenance notes), so only Kepler-mission
 identifiers can be resolved: a KIC ID ('KIC 11904151' or a bare integer, which
 is assumed to be a KIC ID since this catalog is Kepler-only), a KOI name
-('K00752.01'), or a confirmed Kepler planet name ('Kepler-227 b'). A TESS
+('K00752.01'), a confirmed Kepler planet name ('Kepler-227 b'), or a Kepler DR25
+TCE identifier ('010797460-01' = KIC 10797460, TCE planet number 1, matched
+against kepid + koi_tce_plnt_num). A TESS
 Input Catalog (TIC) identifier is a DIFFERENT catalog's numbering scheme for
 a different mission -- 'TIC 12345' and 'KIC 12345' are not the same object,
 and this module never treats one as the other. TIC-shaped input is detected
@@ -86,7 +88,7 @@ _normalize = normalize_identifier
 @dataclass
 class CatalogResolution:
     requested_identifier: str | None
-    identifier_type: str  # "kic" | "koi_name" | "kepler_name" | "tic" | "unrecognized" | "none"
+    identifier_type: str  # "kic" | "koi_name" | "kepler_name" | "tce" | "tic" | "unrecognized" | "none"
     match_status: str  # "not_provided" | "not_found" | "unsupported_identifier_type" | "lookup_error" | "matched_koi" | "matched_star"
     matched_kepid: int | None = None
     matched_kepoi_name: str | None = None
@@ -95,6 +97,10 @@ class CatalogResolution:
     fields: dict[str, float | None] = field(default_factory=dict)
     field_available: dict[str, bool] = field(default_factory=dict)
     note: str = ""
+    # Raw catalogue row(s) behind the match, so the characterization engine
+    # can read uncertainty (_err1/_err2) and planet-level reference columns
+    # without a second lookup. Empty for any non-match.
+    matched_rows: list[dict] = field(default_factory=list)
 
 
 def _empty_resolution(identifier: str | None, identifier_type: str, status: str, note: str) -> CatalogResolution:
@@ -140,6 +146,7 @@ def _resolution_from_single_row(identifier: str, identifier_type: str, row: dict
         fields=fields,
         field_available=availability,
         note=note,
+        matched_rows=[row],
     )
 
 
@@ -172,7 +179,22 @@ def _resolution_from_star_only(identifier: str, identifier_type: str, kepid: int
             "and were left unavailable. Provide a KOI name (e.g. K00752.01) or Kepler name (e.g. "
             "'Kepler-227 b') to resolve those two fields as well."
         ),
+        matched_rows=list(rows),
     )
+
+
+# Kepler DR25 TCE identifiers: '<KIC, zero-padded to 9 digits>-<planet number>'
+# (e.g. '010797460-01'), optionally prefixed with 'TCE'/'KIC', or the spelled
+# form 'KIC 10797460 TCE 1'. Matched on the raw string, because normalization
+# strips the hyphen that distinguishes a TCE from a bare KIC number.
+_TCE_RE = re.compile(r"^(?:TCE[\s:_]*)?(?:KIC[\s_]*)?0*(\d{1,9})-0*(\d{1,2})$")
+_TCE_SPELLED_RE = re.compile(r"^KIC[\s_-]*0*(\d{1,9})[\s_-]*TCE[\s_-]*0*(\d{1,2})$")
+
+
+def _parse_tce(raw: str) -> tuple[int, int] | None:
+    text = raw.strip().upper()
+    m = _TCE_RE.match(text) or _TCE_SPELLED_RE.match(text)
+    return (int(m.group(1)), int(m.group(2))) if m else None
 
 
 def _classify_identifier(compact: str) -> str:
@@ -226,6 +248,14 @@ def resolve_object_id(object_id: str | int | None) -> CatalogResolution:
     if len(raw) > MAX_OBJECT_ID_LENGTH:
         raise InvalidObjectIdError(f"Object ID must be at most {MAX_OBJECT_ID_LENGTH} characters (got {len(raw)}).")
 
+    tce = _parse_tce(raw)
+    if tce is not None:
+        try:
+            catalog = get_koi_catalog()
+        except KoiCatalogUnavailableError as exc:
+            return _lookup_error_resolution(raw, "tce", exc)
+        return _resolve_tce(catalog, raw, *tce)
+
     compact = _normalize(raw)
     identifier_type = _classify_identifier(compact)
 
@@ -275,6 +305,18 @@ def _resolution_from_rows(raw: str, identifier_type: str, rows: list[dict], sing
     )
     resolution.n_candidate_rows = len(rows)
     return resolution
+
+
+def _resolve_tce(catalog: KoiCatalog, raw: str, kepid: int, planet_number: int) -> CatalogResolution:
+    """A TCE (KIC + TCE planet number) identifies exactly one KOI row, via
+    the catalogue's kepid and koi_tce_plnt_num columns."""
+    rows = [r for r in catalog.by_kepid.get(kepid, []) if _coerce_float(r.get("koi_tce_plnt_num")) == planet_number]
+    if rows:
+        return _resolution_from_rows(raw, "tce", rows, f"Matched TCE {kepid:09d}-{planet_number:02d} "
+                                                       f"({rows[0]['kepoi_name']}).")
+    return _empty_resolution(raw, "tce", "not_found",
+                             f"No KOI catalogue entry for TCE {kepid:09d}-{planet_number:02d} (KIC {kepid}, "
+                             f"TCE planet number {planet_number}).")
 
 
 def _resolve_kic(catalog: KoiCatalog, raw: str, compact: str) -> CatalogResolution:

@@ -29,6 +29,7 @@ services:
     environment:
       - ML_SERVICE_URL=http://ml-service:8001
       - ML_SERVICE_TIMEOUT=${ML_SERVICE_TIMEOUT:-10}
+      - ML_SERVICE_ANALYSIS_TIMEOUT=${ML_SERVICE_ANALYSIS_TIMEOUT:-60}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-http://localhost:5500}
     depends_on:
