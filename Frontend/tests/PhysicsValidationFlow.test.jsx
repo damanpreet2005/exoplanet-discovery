@@ -4,6 +4,14 @@ import App from "../src/App";
 
 const SESSION_KEY = "exoplanet_prediction_session_v1";
 
+// The Physics Validation dashboard typesets every equation with KaTeX -- the
+// heaviest render in the app. Under a full parallel test run on a slow CI
+// runner it can take longer than Testing Library's default 1 s wait (and the
+// whole flow longer than Vitest's default 5 s per test), so both get headroom.
+// They only lengthen a run that is genuinely failing.
+const DASHBOARD_WAIT = { timeout: 10000 };
+vi.setConfig({ testTimeout: 20000 });
+
 const FAKE_LIGHT_CURVE_RESULT = {
   dataset_type: "light_curve",
   filename: "kepler_001.csv",
@@ -124,10 +132,10 @@ describe("Physics Validation workflow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Start Physics Validation/i }));
 
-    await screen.findByRole("heading", { name: /Physics Validation/i });
+    await screen.findByRole("heading", { name: /Physics Validation/i }, DASHBOARD_WAIT);
 
     // Real backend values are shown, not fabricated/hardcoded placeholders.
-    expect(await screen.findByText(/Planet Size Validation/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Planet Size Validation/i, {}, DASHBOARD_WAIT)).toBeInTheDocument();
     expect(screen.getByText(/Transit Duration Validation/i)).toBeInTheDocument();
     expect(screen.getByText(/Orbital Physics Validation/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Pass/i).length).toBeGreaterThan(0);
@@ -207,7 +215,7 @@ describe("Physics Validation workflow", () => {
 
     render(<App />);
     fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
-    const stage = await screen.findByTestId("physics-stage-planet_size");
+    const stage = await screen.findByTestId("physics-stage-planet_size", {}, DASHBOARD_WAIT);
 
     // Rendered mathematics, not a plain-text equation string.
     expect(stage.querySelector(".stage-equation .katex")).not.toBeNull();
@@ -252,7 +260,7 @@ describe("Circular Planet Size check", () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
     render(<App />);
     fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
-    const stage = await screen.findByTestId("physics-stage-planet_size");
+    const stage = await screen.findByTestId("physics-stage-planet_size", {}, DASHBOARD_WAIT);
     expect(within(stage).getByTestId("physics-circular")).toHaveTextContent("Not independent");
     expect(stage).toHaveTextContent(/cannot fail/);
     expect(screen.getByTestId("physics-stage-transit_duration").querySelector("[data-testid='physics-circular']")).toBeNull();
@@ -272,7 +280,7 @@ describe("Circular Planet Size check", () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
     render(<App />);
     fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
-    const stage = await screen.findByTestId("physics-stage-planet_size");
+    const stage = await screen.findByTestId("physics-stage-planet_size", {}, DASHBOARD_WAIT);
     expect(within(stage).queryByTestId("physics-circular")).toBeNull();
   });
 });
@@ -294,7 +302,7 @@ describe("Physics result formatting", () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
     render(<App />);
     fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
-    const result = await screen.findByTestId("physics-result-planet_size");
+    const result = await screen.findByTestId("physics-result-planet_size", {}, DASHBOARD_WAIT);
     expect(result).toHaveTextContent(/Residual\s*0 ppm/);
     expect(result).not.toHaveTextContent("e-14");
   });
