@@ -174,8 +174,10 @@ h4 {
   transition: width 240ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* :focus-visible (not :focus-within) so keyboard focus expands the dock but
+   the focus a mouse click leaves on a link does not keep it open. */
 .dock:hover .dock-panel,
-.dock:focus-within .dock-panel {
+.dock:has(:focus-visible) .dock-panel {
   width: var(--dock-width-expanded);
 }
 
@@ -277,7 +279,7 @@ h4 {
 }
 
 .dock:hover .dock-label,
-.dock:focus-within .dock-label {
+.dock:has(:focus-visible) .dock-label {
   opacity: 1;
   transform: translateX(0);
 }
