@@ -1,5 +1,5 @@
 import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
-import { uploadCsvForAnalysis } from "../src/api/client";
+import { uploadCsvForAnalysis, recomputeCharacterization } from "../src/api/client";
 
 class FakeXHR {
   constructor() {
@@ -110,5 +110,36 @@ describe("uploadCsvForAnalysis", () => {
     xhr.responseText = JSON.stringify({});
     xhr.onload();
     await promise;
+  });
+});
+
+describe("recomputeCharacterization", () => {
+  let originalFetch;
+  beforeEach(() => { originalFetch = global.fetch; });
+  afterEach(() => { global.fetch = originalFetch; });
+
+  test("posts the snapshot, overrides, config and form edits to the gateway", async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: "complete" }) });
+    const edits = { submitted: { koi_srad: 1.1 }, automatic: { koi_srad: 0.927 } };
+    const body = await recomputeCharacterization({
+      inputs: { schema_version: 1 }, overrides: { planet_mass: 5 }, config: { bond_albedo: 0 }, modelFeatureEdits: edits,
+    });
+    expect(body.status).toBe("complete");
+    const [url, options] = global.fetch.mock.calls[0];
+    expect(url).toContain("/api/v1/characterization/recompute");
+    expect(options.method).toBe("POST");
+    expect(options.headers["X-Request-Id"]).toBeTruthy();
+    expect(JSON.parse(options.body)).toEqual({
+      inputs: { schema_version: 1 }, overrides: { planet_mass: 5 }, config: { bond_albedo: 0 }, model_feature_edits: edits,
+    });
+  });
+
+  test("surfaces the backend's structured error", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false, json: async () => ({ error: { code: "CHARACTERIZATION_VALIDATION_ERROR", message: "bad" } }),
+    });
+    await expect(recomputeCharacterization({ inputs: {} })).rejects.toEqual({
+      code: "CHARACTERIZATION_VALIDATION_ERROR", message: "bad",
+    });
   });
 });

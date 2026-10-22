@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 import App from "../src/App";
 
@@ -119,8 +119,8 @@ describe("Physics Validation workflow", () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: /Results/i }));
-    await screen.findByRole("heading", { name: /Step 3.*Prediction Results/i });
+    fireEvent.click(screen.getByRole("link", { name: "Detection & Prediction" }));
+    await screen.findByRole("heading", { name: /Transit Detection & ML Prediction/i });
 
     fireEvent.click(screen.getByRole("button", { name: /Start Physics Validation/i }));
 
@@ -145,7 +145,7 @@ describe("Physics Validation workflow", () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ features: [], order_configured: true }) });
 
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: /Physics Validation/i }));
+    fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
 
     expect(await screen.findByText(/Run Stage 2 Physics Validation/i)).toBeInTheDocument();
     expect(global.fetch.mock.calls.some(([url]) => url.includes("/api/v1/physics-validation"))).toBe(false);
@@ -159,7 +159,7 @@ describe("Physics Validation workflow", () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: /Physics Validation/i }));
+    fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
     fireEvent.click(await screen.findByRole("button", { name: /Start Physics Validation/i }));
 
     expect(await screen.findByText(/down/i)).toBeInTheDocument();
@@ -171,15 +171,131 @@ describe("Physics Validation workflow", () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ features: [], order_configured: true }) });
 
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: /Results/i }));
-    await screen.findByRole("heading", { name: /Step 3.*Prediction Results/i });
+    fireEvent.click(screen.getByRole("link", { name: "Detection & Prediction" }));
+    await screen.findByRole("heading", { name: /Transit Detection & ML Prediction/i });
 
     // The previously-computed, matching report is recognized as current.
     expect(screen.getByRole("button", { name: /View Physics Validation/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: /New Prediction/i })[0]);
-    await screen.findByRole("heading", { name: /Step 1.*Upload Light Curve/i });
+    await screen.findByRole("heading", { name: /^Upload Light Curve$/i });
 
     expect(JSON.parse(window.sessionStorage.getItem(SESSION_KEY) || "null")).toBeNull();
+  });
+  test("each stage renders its equation, the actual input values, and never shows Pass for an unevaluated check", async () => {
+    const report = JSON.parse(JSON.stringify(FAKE_PHYSICS_REPORT));
+    report.tests[0].calculation = {
+      equation: "delta_ppm ~= ...",
+      inputs: {
+        koi_depth: { value: 83.9, unit: "ppm" },
+        koi_prad: { value: 1.0, unit: "Earth radii" },
+        koi_srad: { value: 1.0, unit: "Solar radii" },
+      },
+      derived: { radius_ratio_k: { value: 0.0091577, unit: "Rp/Rstar" }, expected_depth: { value: 83.86, unit: "ppm" } },
+    };
+    report.tests[0].expected = { transit_depth: { value: 83.86, unit: "ppm" } };
+    report.tests[1] = {
+      ...report.tests[1], status: "NOT_EVALUATED", summary: "Could not be evaluated: koi_impact is missing.",
+      expected: {}, discrepancy: null, missing_data: ["koi_impact"],
+    };
+    report.overall_status = "PARTIAL";
+    seedSession({
+      physicsResult: report,
+      physicsCandidateKey: JSON.stringify(FAKE_MANUAL_PARAMETERS, Object.keys(FAKE_MANUAL_PARAMETERS).sort()),
+    });
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
+    const stage = await screen.findByTestId("physics-stage-planet_size");
+
+    // Rendered mathematics, not a plain-text equation string.
+    expect(stage.querySelector(".stage-equation .katex")).not.toBeNull();
+    expect(stage).not.toHaveTextContent("delta_ppm ~=");
+    // Parameter table shows the value the backend actually used, its unit and its source.
+    const depthRow = within(stage).getByText("Observed transit depth").closest("tr");
+    expect(depthRow).toHaveTextContent("83.9");
+    expect(depthRow).toHaveTextContent("ppm");
+    expect(depthRow).toHaveTextContent("Manual entry");
+    expect(within(stage).getByText("Planet radius").closest("tr")).toHaveTextContent("R⊕");
+    // Result area: observed vs expected from the report, with the stated tolerance.
+    const result = screen.getByTestId("physics-result-planet_size");
+    expect(result).toHaveTextContent("83.86 ppm");
+    expect(result).toHaveTextContent("≤ 30% relative");
+
+    const unevaluated = screen.getByTestId("physics-result-transit_duration");
+    expect(unevaluated).toHaveTextContent(/Not evaluated/);
+    expect(unevaluated).toHaveTextContent("koi_impact");
+    expect(within(unevaluated).queryByText("Pass")).toBeNull();
+    const impactRow = within(screen.getByTestId("physics-stage-transit_duration")).getByText("Impact parameter").closest("tr");
+    expect(impactRow).toHaveTextContent(/Missing/);
+  });
+});
+
+describe("Circular Planet Size check", () => {
+  afterEach(() => window.sessionStorage.clear());
+
+  test("is flagged as not independent when Rp was derived from the depth", async () => {
+    const lc = {
+      ...FAKE_LIGHT_CURVE_RESULT,
+      features: {
+        koi_prad: { value: 1.0, unit: "Earth radii", source: "derived_rp_eq_rstar_sqrt_depth", status: "derived", note: "" },
+        koi_depth: { value: 83.9, unit: "ppm", source: "box_least_squares", status: "estimated", note: "" },
+      },
+    };
+    window.history.pushState({}, "", "/");
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      lightCurveResult: lc, finalResult: FAKE_FINAL_RESULT, manualParameters: FAKE_MANUAL_PARAMETERS,
+      physicsResult: FAKE_PHYSICS_REPORT,
+      physicsCandidateKey: JSON.stringify(FAKE_MANUAL_PARAMETERS, Object.keys(FAKE_MANUAL_PARAMETERS).sort()),
+    }));
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
+    const stage = await screen.findByTestId("physics-stage-planet_size");
+    expect(within(stage).getByTestId("physics-circular")).toHaveTextContent("Not independent");
+    expect(stage).toHaveTextContent(/cannot fail/);
+    expect(screen.getByTestId("physics-stage-transit_duration").querySelector("[data-testid='physics-circular']")).toBeNull();
+  });
+
+  test("is not flagged when the radius was supplied independently", async () => {
+    const lc = { ...FAKE_LIGHT_CURVE_RESULT, features: {
+      koi_prad: { value: 2.0, unit: "Earth radii", source: "derived_rp_eq_rstar_sqrt_depth", status: "derived", note: "" },
+      koi_depth: { value: 83.9, unit: "ppm", source: "box_least_squares", status: "estimated", note: "" },
+    } };   // submitted koi_prad (1.0) differs from the derived 2.0 -> user-entered
+    window.history.pushState({}, "", "/");
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      lightCurveResult: lc, finalResult: FAKE_FINAL_RESULT, manualParameters: FAKE_MANUAL_PARAMETERS,
+      physicsResult: FAKE_PHYSICS_REPORT,
+      physicsCandidateKey: JSON.stringify(FAKE_MANUAL_PARAMETERS, Object.keys(FAKE_MANUAL_PARAMETERS).sort()),
+    }));
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
+    const stage = await screen.findByTestId("physics-stage-planet_size");
+    expect(within(stage).queryByTestId("physics-circular")).toBeNull();
+  });
+});
+
+describe("Physics result formatting", () => {
+  afterEach(() => window.sessionStorage.clear());
+
+  test("an exact match shows a residual of 0, not floating-point noise", async () => {
+    const report = JSON.parse(JSON.stringify(FAKE_PHYSICS_REPORT));
+    report.tests[0].observed.transit_depth.value = 495.9;
+    report.tests[0].expected.transit_depth.value = 495.9;
+    report.tests[0].discrepancy.absolute = { value: 5.684e-14, unit: "ppm" };
+    window.history.pushState({}, "", "/");
+    window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      lightCurveResult: FAKE_LIGHT_CURVE_RESULT, finalResult: FAKE_FINAL_RESULT, manualParameters: FAKE_MANUAL_PARAMETERS,
+      physicsResult: report,
+      physicsCandidateKey: JSON.stringify(FAKE_MANUAL_PARAMETERS, Object.keys(FAKE_MANUAL_PARAMETERS).sort()),
+    }));
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    render(<App />);
+    fireEvent.click(screen.getByRole("link", { name: "Physics Validation" }));
+    const result = await screen.findByTestId("physics-result-planet_size");
+    expect(result).toHaveTextContent(/Residual\s*0 ppm/);
+    expect(result).not.toHaveTextContent("e-14");
   });
 });

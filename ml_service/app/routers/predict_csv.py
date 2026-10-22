@@ -42,7 +42,9 @@ from app.feature_aliases import (
     looks_like_light_curve_header,
     looks_like_tabular_kepler_header,
 )
-from app.feature_engine import extract_features
+from app.characterization import characterize_light_curve
+from app.config import get_settings
+from app.feature_engine import apply_fitted_impact_parameter, extract_features
 from app.stellar_catalog_service import MAX_OBJECT_ID_LENGTH
 from app.lightcurve_extraction import (
     BEST_EFFORT_WARNING,
@@ -185,13 +187,16 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
 
     def _extract():
         time_arr, flux_arr, n_dropped = parse_time_flux_csv(raw_bytes)
-        return extract_features(time_arr, flux_arr, object_id), n_dropped
+        features = extract_features(time_arr, flux_arr, object_id)
+        characterization = _characterize(time_arr, flux_arr, features, object_id, request_id)
+        apply_fitted_impact_parameter(features, characterization)
+        return features, n_dropped, characterization
 
     try:
-        # CPU-bound (CSV parsing + the transit search + shape fitting) -- run
-        # off the event loop so a slow/large upload can't block concurrent
-        # requests.
-        result, n_dropped = await asyncio.to_thread(_extract)
+        # CPU-bound (CSV parsing + the transit search + transit-model fit) --
+        # run off the event loop so a slow/large upload can't block
+        # concurrent requests.
+        result, n_dropped, characterization = await asyncio.to_thread(_extract)
     except LightCurveValidationError as exc:
         raise CsvValidationHTTPError(str(exc)) from exc
 
@@ -250,6 +255,9 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
             bls_duration_hours=extraction.bls.duration_hours,
             bls_depth_ppm=extraction.bls.depth_ppm,
             bls_transit_snr=extraction.bls.snr,
+            bls_noise_ppm=extraction.bls.noise_ppm,
+            bls_n_in_transit=extraction.bls.n_in_transit,
+            bls_sde=extraction.bls.sde,
             num_transits_observed=extraction.characterisation["num_transits_observed"],
         ),
         extracted_features=dict(zip(LIGHTCURVE_FEATURE_NAMES, extraction.features)),
@@ -259,6 +267,9 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
             bls_duration_hours=extraction.characterisation["bls_duration_hours"],
             bls_depth_ppm=extraction.characterisation["bls_depth_ppm"],
             bls_transit_snr=extraction.characterisation["bls_transit_snr"],
+            bls_noise_ppm=extraction.characterisation["bls_noise_ppm"],
+            bls_n_in_transit=extraction.characterisation["bls_n_in_transit"],
+            bls_sde=extraction.characterisation["bls_sde"],
             num_transits_observed=extraction.characterisation["num_transits_observed"],
             odd_even_depth_ratio=extraction.characterisation["odd_even_depth_ratio"],
             secondary_eclipse_depth_ppm=extraction.characterisation["secondary_eclipse_depth_ppm"],
@@ -281,7 +292,22 @@ async def _handle_light_curve(request: Request, background_tasks: BackgroundTask
         missing_features=result.missing_features,
         ready_for_prediction=result.ready_for_prediction,
         prediction=prediction_response,
+        characterization=characterization,
     )
+
+
+def _characterize(time_arr, flux_arr, features, object_id: str, request_id: str) -> dict:
+    """Planet characterization (app/characterization) for this light curve.
+    Runs after -- and entirely independently of -- the 17-feature ML
+    extraction; a characterization failure never fails the upload, it is
+    reported as an explicit 'failed' status instead."""
+    try:
+        return characterize_light_curve(time_arr, flux_arr, features.extraction.bls, features.catalog, object_id,
+                                        archive_lookup=get_settings().characterization_archive_lookup)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("characterization_failed", extra={"request_id": request_id})
+        return {"status": "failed", "status_message": f"Planet characterization could not be computed: {exc}",
+                "parameters": {}, "sections": [], "classifications": [], "warnings": [], "missing_inputs": []}
 
 
 async def _handle_tabular(request: Request, background_tasks: BackgroundTasks,

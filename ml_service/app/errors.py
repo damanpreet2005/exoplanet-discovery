@@ -24,6 +24,15 @@ class CsvValidationHTTPError(Exception):
         super().__init__(message)
 
 
+class CharacterizationRequestError(Exception):
+    """Malformed characterization recompute request (bad snapshot, invalid
+    or unphysical expert override, unknown config option)."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 class FileTooLargeError(Exception):
     """Raised when an uploaded CSV exceeds the configured size limit."""
 
@@ -68,6 +77,14 @@ async def csv_validation_handler(request: Request, exc: CsvValidationHTTPError):
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content=structured_error("CSV_VALIDATION_ERROR", exc.message),
+    )
+
+
+async def characterization_request_handler(request: Request, exc: CharacterizationRequestError):
+    logger.warning("characterization_request_error", extra={"endpoint": str(request.url.path)})
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content=structured_error("CHARACTERIZATION_VALIDATION_ERROR", exc.message),
     )
 
 

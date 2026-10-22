@@ -32,7 +32,8 @@ the model's feature_1..feature_17 slots), all derived purely from time+flux:
   3.  bls_depth_ppm                  -- BLS best-fit transit depth (parts per million)
   4.  transit_epoch                  -- BLS best-fit reference transit time (same units as input time)
   5.  num_transits_observed          -- floor(baseline / period)
-  6.  transit_snr                    -- BLS depth signal-to-noise ratio
+  6.  transit_snr                    -- BLS box-depth signal-to-noise ratio (see run_box_least_squares);
+                                         null when the per-point noise cannot be estimated
   7.  baseline_days                  -- max(time) - min(time)
   8.  flux_scatter_ppm               -- std of the median-normalized flux
   9.  duration_over_period           -- transit duration / period (dimensionless shape ratio)
@@ -141,7 +142,27 @@ class BlsResult:
     depth_ppm: float
     depth_fraction: float
     transit_epoch: float
-    snr: float
+    # Box-depth SNR = depth / (sigma sqrt(1/N_in + 1/N_out)) at the best box;
+    # None when the per-point noise sigma cannot be estimated (never 0).
+    snr: float | None
+    noise_ppm: float | None = None      # robust per-point white noise sigma used for the SNR
+    n_in_transit: int = 0               # points inside the best box, all transits combined
+    power: float | None = None          # BLS log-likelihood power at the best period (not an SNR)
+    sde: float | None = None            # signal detection efficiency of the periodogram peak (not an SNR)
+
+
+def robust_point_noise(normalized_flux: np.ndarray) -> float | None:
+    """Per-point white noise sigma of a normalized light curve, from the
+    median absolute deviation of point-to-point differences / sqrt(2).
+    Differencing removes slow stellar/instrumental trends and the MAD
+    ignores the few in-transit and outlier points, so no transit model is
+    needed. None when it cannot be estimated (e.g. constant flux)."""
+    diff = np.diff(np.asarray(normalized_flux, dtype=float))
+    diff = diff[np.isfinite(diff)]
+    if diff.size < 10:
+        return None
+    sigma = 1.4826 * float(np.median(np.abs(diff - np.median(diff)))) / math.sqrt(2.0)
+    return sigma if math.isfinite(sigma) and sigma > 0 else None
 
 
 @dataclass
@@ -291,7 +312,14 @@ def run_box_least_squares(time: np.ndarray, normalized_flux: np.ndarray) -> BlsR
         min_duration_days=float(durations.min()),
     )
 
-    model = BoxLeastSquares(time, normalized_flux)
+    # Per-point uncertainties are passed to BLS so that its depth_snr is a
+    # signal-to-noise ratio. Without `dy` astropy assumes sigma = 1 (in flux
+    # units) for every point, and depth_snr degenerates to depth x
+    # sqrt(N_in) -- ~0.004 for a 500 ppm transit instead of ~29. A constant
+    # sigma rescales the periodogram power uniformly, so the selected period,
+    # duration and depth are unchanged.
+    sigma = robust_point_noise(normalized_flux)
+    model = BoxLeastSquares(time, normalized_flux, dy=None if sigma is None else np.full(len(time), sigma))
     try:
         periodogram = model.autopower(
             durations, minimum_period=min_period, maximum_period=max_period,
@@ -324,7 +352,22 @@ def run_box_least_squares(time: np.ndarray, normalized_flux: np.ndarray) -> BlsR
         duration_days = float(durations[0])
     if not math.isfinite(transit_epoch):
         transit_epoch = float(time[0])
-    snr = float(periodogram.depth_snr[best]) if hasattr(periodogram, "depth_snr") else float("nan")
+    # Box-depth SNR, all transits combined (astropy BoxLeastSquares):
+    #   SNR = depth / depth_err,  depth_err = sigma sqrt(1/N_in + 1/N_out)
+    # i.e. ~ (depth / sigma) sqrt(N_in) for N_out >> N_in. White noise is
+    # assumed; correlated noise is handled by the transit-model fit's SNR.
+    snr = None
+    if sigma is not None:
+        raw = float(periodogram.depth_snr[best])
+        snr = raw if math.isfinite(raw) else None
+    finite_power = power[np.isfinite(power)]
+    sde = None
+    if finite_power.size > 10 and float(np.std(finite_power)) > 0:
+        # Signal Detection Efficiency (Kovacs, Zucker & Mazeh 2002): height of
+        # the periodogram peak above the mean, in units of the scatter.
+        sde = float((power[best] - np.mean(finite_power)) / np.std(finite_power))
+    ph = _phase(time, period_days, transit_epoch) * period_days
+    n_in = int((np.abs(ph) < 0.5 * duration_days).sum())
 
     return BlsResult(
         period_days=period_days,
@@ -332,7 +375,11 @@ def run_box_least_squares(time: np.ndarray, normalized_flux: np.ndarray) -> BlsR
         depth_ppm=max(depth_fraction, 0.0) * 1e6,
         depth_fraction=max(depth_fraction, 0.0),
         transit_epoch=transit_epoch,
-        snr=snr if math.isfinite(snr) else 0.0,
+        snr=snr,
+        noise_ppm=None if sigma is None else sigma * 1e6,
+        n_in_transit=n_in,
+        power=float(power[best]) if math.isfinite(float(power[best])) else None,
+        sde=sde if sde is not None and math.isfinite(sde) else None,
     )
 
 
@@ -599,7 +646,9 @@ def compute_feature_vector(time: np.ndarray, flux: np.ndarray) -> LightCurveExtr
         point_to_point_ppm,
     ]
 
-    if any(not math.isfinite(v) for v in features):
+    # The box SNR is legitimately unavailable when the noise cannot be
+    # estimated (reported as null, never as 0); every other value must be finite.
+    if any(v is None or not math.isfinite(v) for i, v in enumerate(features) if not (i == 5 and v is None)):
         raise LightCurveValidationError(
             "Feature computation produced a non-finite value for this light curve."
         )
@@ -609,6 +658,9 @@ def compute_feature_vector(time: np.ndarray, flux: np.ndarray) -> LightCurveExtr
         "bls_duration_hours": bls.duration_hours,
         "bls_depth_ppm": bls.depth_ppm,
         "bls_transit_snr": bls.snr,
+        "bls_noise_ppm": bls.noise_ppm,
+        "bls_n_in_transit": bls.n_in_transit,
+        "bls_sde": bls.sde,
         "num_transits_observed": num_transits,
         "odd_even_depth_ratio": odd_even_ratio,
         "secondary_eclipse_depth_ppm": secondary_depth_ppm,
@@ -635,10 +687,12 @@ def suggest_koi_parameters(extraction: LightCurveExtraction) -> dict[str, float]
     suggestions for the user to review on the manual-parameter step, not a
     substitute feature vector fed into the model directly."""
     bls = extraction.bls
-    return {
+    out = {
         "koi_period": bls.period_days,
         "koi_time0bk": bls.transit_epoch,
         "koi_duration": bls.duration_hours,
         "koi_depth": bls.depth_ppm,
-        "koi_model_snr": bls.snr,
     }
+    if bls.snr is not None:
+        out["koi_model_snr"] = bls.snr
+    return out

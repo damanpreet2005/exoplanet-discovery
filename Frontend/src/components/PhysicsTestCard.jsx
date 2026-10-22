@@ -1,145 +1,276 @@
 import PhysicsStatusBadge from "./PhysicsStatusBadge";
 import ComparisonBarChart from "./ComparisonBarChart";
+import TeX from "./TeX";
+import Icon from "./Icon";
+import { PHYSICS_STAGES, displayUnit } from "../lib/physicsEquations";
+import { SOURCE_META, featureSource } from "../lib/featureSources";
+import { planetSizeIsCircular } from "../lib/evidence";
+import { useAnalysis } from "../context/AnalysisContext";
 
-function fmt(measurement, digits = 3) {
-  if (!measurement || measurement.value === null || measurement.value === undefined) return "Unavailable";
-  const v = measurement.value;
-  const rounded = Math.abs(v) >= 1000 ? v.toFixed(1) : v.toFixed(digits);
-  return `${rounded}${measurement.unit ? ` ${measurement.unit}` : ""}`;
+function num(value, digits = 4) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  const abs = Math.abs(value);
+  if (abs !== 0 && (abs >= 1e5 || abs < 1e-3)) return value.toExponential(3);
+  return abs >= 1000 ? value.toFixed(1) : Number(value.toPrecision(digits)).toString();
 }
 
-// Each test's primary observed/expected metric key -- used to decide which
-// pair to plot as a comparison bar chart. Orbital Physics has no single
-// observed-vs-expected pair (it checks self-consistency instead), so it's
-// omitted here deliberately.
-const CHART_METRIC_KEY = {
-  planet_size: "transit_depth",
-  transit_duration: "transit_duration",
+function fmt(measurement) {
+  const v = num(measurement?.value);
+  if (v === null) return "Unavailable";
+  const unit = displayUnit(measurement.unit);
+  return unit === "—" ? v : `${v} ${unit}`;
+}
+
+/** Residual for display: floating-point noise around an exact match
+ * (e.g. 5.7e-14 ppm) is shown as 0, not as a meaningless tiny number. */
+function residualText(residual, observed) {
+  const v = residual?.value;
+  const scale = Math.abs(observed?.value ?? 0);
+  if (Number.isFinite(v) && scale > 0 && Math.abs(v) < 1e-9 * scale) {
+    const unit = displayUnit(residual.unit);
+    return unit === "—" ? "0" : `0 ${unit}`;
+  }
+  return fmt(residual);
+}
+
+const INTERPRETATION = {
+  PASS: "Consistent with the physical model within the stated tolerance.",
+  REVIEW_REQUIRED: "A real discrepancy or geometric inconsistency was found. This is a prompt for closer inspection, not a verdict that the candidate is a false positive.",
+  NOT_EVALUATED: "No comparison was performed because a required input was missing or invalid. No result is reported.",
 };
 
-export default function PhysicsTestCard({ test }) {
-  const chartKey = CHART_METRIC_KEY[test.test_id];
-  const observedMetric = chartKey ? test.observed?.[chartKey] : null;
-  const expectedMetric = chartKey ? test.expected?.[chartKey] : null;
-  const hasChartData = observedMetric && expectedMetric
-    && typeof observedMetric.value === "number" && typeof expectedMetric.value === "number";
+function InputTable({ stage, test }) {
+  const { result, manualParameters } = useAnalysis();
+  const missing = new Set(test.missing_data || []);
+  return (
+    <div className="table-scroll">
+      <table className="feature-table data-table param-table">
+        <thead>
+          <tr><th>Symbol</th><th>Parameter</th><th>Value used</th><th>Unit</th><th>Source</th></tr>
+        </thead>
+        <tbody>
+          {stage.inputs.map((row) => {
+            const m = test.calculation?.inputs?.[row.key];
+            // Cross-check inputs are not part of the backend's `inputs`
+            // block; show the exact submitted value the check read.
+            const raw = m ? m.value : manualParameters?.[row.key];
+            const unit = m ? m.unit : result?.features?.[row.key]?.unit;
+            const isMissing = missing.has(row.key) || raw === null || raw === undefined;
+            const source = featureSource(row.key, result, manualParameters);
+            return (
+              <tr key={row.key} className={isMissing ? "is-missing" : ""}>
+                <td><TeX math={row.sym} /></td>
+                <th>
+                  {row.name}
+                  <span className="mono-sub">{row.key}{row.crossCheck ? " · cross-check only" : ""}</span>
+                </th>
+                <td className="value">{isMissing ? <span className="missing-flag"><Icon name="error" size={14} /> Missing / invalid</span> : num(raw)}</td>
+                <td>{displayUnit(unit)}</td>
+                <td><span className={`src-tag ${SOURCE_META[source]?.className || ""}`}>{SOURCE_META[source]?.label || source}</span></td>
+              </tr>
+            );
+          })}
+          {stage.constants.map((c) => (
+            <tr key={c.sym} className="is-constant">
+              <td><TeX math={c.sym} /></td>
+              <th>{c.name}</th>
+              <td className="value">{c.value}</td>
+              <td>{c.unit}</td>
+              <td><span className="src-tag src-constant">{c.source}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DerivedTable({ stage, test }) {
+  const entries = Object.entries(test.calculation?.derived || {});
+  if (!entries.length) return null;
+  return (
+    <div className="table-scroll">
+      <table className="feature-table data-table param-table">
+        <thead><tr><th>Symbol</th><th>Intermediate quantity</th><th>Value</th><th>Unit</th></tr></thead>
+        <tbody>
+          {entries.map(([key, m]) => {
+            const meta = stage?.derived?.[key];
+            return (
+              <tr key={key}>
+                <td>{meta ? <TeX math={meta.sym} /> : "—"}</td>
+                <th>{meta?.name || key.replace(/_/g, " ")}</th>
+                <td className="value">{num(m.value) ?? "Unavailable"}</td>
+                <td>{displayUnit(m.unit)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ResultArea({ stage, test }) {
+  const evaluated = test.status !== "NOT_EVALUATED";
+  const obsKey = Object.keys(test.observed || {})[0];
+  const observed = obsKey ? test.observed[obsKey] : null;
+  const expected = obsKey ? test.expected?.[obsKey] : null;
+  const tol = test.tolerance?.relative_tolerance;
+  const hasPair = observed && expected && Number.isFinite(observed.value) && Number.isFinite(expected.value);
 
   return (
-    <div className="panel physics-card">
-      <div className="physics-card-header">
-        <h3 style={{ margin: 0 }}>{test.name}</h3>
+    <div className={`stage-result status-${test.status}`} data-testid={`physics-result-${test.test_id}`}>
+      <div className="stage-result-head">
+        <h4>Result</h4>
         <PhysicsStatusBadge status={test.status} />
       </div>
 
-      <p className="physics-card-summary">{test.summary}</p>
-
-      {hasChartData && (
-        <ComparisonBarChart
-          observedLabel="Observed"
-          observedValue={observedMetric.value}
-          expectedLabel="Expected"
-          expectedValue={expectedMetric.value}
-          unit={observedMetric.unit}
-        />
+      {evaluated && hasPair ? (
+        <dl className="result-grid">
+          <div><dt>Observed</dt><dd>{fmt(observed)}</dd></div>
+          <div><dt>Expected</dt><dd>{fmt(expected)}</dd></div>
+          {test.discrepancy && (
+            <div>
+              <dt>Residual</dt>
+              <dd>
+                {residualText(test.discrepancy.absolute, observed)}
+                {test.discrepancy.relative_valid && test.discrepancy.relative !== null && (
+                  <span className="result-sub">{(test.discrepancy.relative * 100).toFixed(1)}% relative</span>
+                )}
+              </dd>
+            </div>
+          )}
+          <div>
+            <dt>Constraint</dt>
+            <dd>{tol !== null && tol !== undefined ? `≤ ${(tol * 100).toFixed(0)}% relative` : "—"}</dd>
+          </div>
+        </dl>
+      ) : evaluated ? (
+        <>
+          {test.consistency_checks?.length > 0 && (
+            <ul className="check-list compact">
+              {test.consistency_checks.map((c, i) => (
+                <li key={i} className="ok"><Icon name="check_circle" size={16} filled /><div><p className="check-note">{c}</p></div></li>
+              ))}
+            </ul>
+          )}
+        </>
+      ) : (
+        <p className="stage-result-missing">
+          <Icon name="do_not_disturb_on" size={16} /> Not evaluated — missing or invalid: <code>{(test.missing_data || []).join(", ") || "see summary"}</code>
+        </p>
       )}
 
-      <div className="physics-metric-grid">
-        {Object.entries(test.observed || {}).map(([key, m]) => (
-          <div className="physics-metric" key={`observed-${key}`}>
-            <span className="physics-metric-label">Observed {key.replace(/_/g, " ")}</span>
-            <span className="physics-metric-value">{fmt(m)}</span>
+      {stage?.constraint && tol !== null && tol !== undefined && (
+        <div className="stage-constraint"><span>Pass condition</span><TeX math={`\\displaystyle ${stage.constraint(tol)}`} /></div>
+      )}
+      {stage?.constraintTex && (
+        <div className="stage-constraint"><span>Pass condition</span><TeX math={`\\displaystyle ${stage.constraintTex}`} /></div>
+      )}
+
+      {evaluated && hasPair && (
+        <ComparisonBarChart observedLabel="Observed" observedValue={observed.value} expectedLabel="Expected" expectedValue={expected.value} unit={displayUnit(observed.unit)} />
+      )}
+
+      <div className="stage-interpretation">
+        <h5>What this means</h5>
+        <p>{test.summary}</p>
+        <p className="char-muted">{INTERPRETATION[test.status]}</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One Stage 2 physics check, laid out as: question → equation → parameters
+ * (with the actual values used) → result → interpretation. Every number
+ * comes from the backend report.
+ */
+export default function PhysicsTestCard({ test }) {
+  const stage = PHYSICS_STAGES[test.test_id];
+  const { result, manualParameters } = useAnalysis();
+  const circular = test.test_id === "planet_size" && planetSizeIsCircular(result, manualParameters);
+  return (
+    <details className="panel physics-stage" open data-testid={`physics-stage-${test.test_id}`}>
+      <summary className="physics-stage-summary">
+        <div className="physics-stage-title">
+          <h3>{test.name}</h3>
+          {stage && <p>{stage.question}</p>}
+        </div>
+        <PhysicsStatusBadge status={test.status} />
+        {circular && <span className="char-chip prov-assumed" data-testid="physics-circular">Not independent</span>}
+        <Icon name="expand_more" size={22} className="physics-stage-chevron" />
+      </summary>
+      {circular && (
+        <p className="physics-circular-note" role="note">
+          <Icon name="warning" size={16} />
+          {/* One text element: as separate flex items, the text and <sub> tags were laid out as columns. */}
+          <span>
+            Not an independent check: the planet radius was computed from this same transit depth
+            (R<sub>p</sub> = R<sub>⋆</sub>√δ), so the expected depth equals the observed depth by construction and
+            this check cannot fail. An independently measured planet radius is needed to test it.
+          </span>
+        </p>
+      )}
+
+      <div className="physics-stage-body">
+        <div className="physics-stage-science">
+          {stage && <p className="stage-explanation">{stage.explanation}</p>}
+
+          <div className="stage-block">
+            <h4>Equation</h4>
+            {stage ? (
+              <>
+                <TeX math={stage.equation} block className="stage-equation" />
+                {stage.equationNote && <p className="char-muted">{stage.equationNote}</p>}
+                {stage.derivations?.length > 0 && (
+                  <details className="stage-derivations">
+                    <summary>Supporting relations ({stage.derivations.length})</summary>
+                    {stage.derivations.map((d) => (
+                      <div key={d.label} className="stage-derivation">
+                        <span>{d.label}</span>
+                        <TeX math={d.tex} block />
+                      </div>
+                    ))}
+                  </details>
+                )}
+              </>
+            ) : (
+              <code className="char-eq">{test.calculation?.equation}</code>
+            )}
           </div>
-        ))}
-        {Object.entries(test.expected || {}).map(([key, m]) => (
-          <div className="physics-metric" key={`expected-${key}`}>
-            <span className="physics-metric-label">Expected {key.replace(/_/g, " ")}</span>
-            <span className="physics-metric-value">{fmt(m)}</span>
+
+          <div className="stage-block">
+            <h4>Parameters</h4>
+            {stage ? <InputTable stage={stage} test={test} /> : null}
+            {stage?.unitNotes?.length > 0 && (
+              <ul className="unit-notes">
+                {stage.unitNotes.map((n) => <li key={n}>{n}</li>)}
+              </ul>
+            )}
           </div>
-        ))}
-        {test.calculation?.derived && Object.entries(test.calculation.derived).map(([key, m]) => (
-          <div className="physics-metric" key={`derived-${key}`}>
-            <span className="physics-metric-label">{key.replace(/_/g, " ")}</span>
-            <span className="physics-metric-value">{fmt(m)}</span>
-          </div>
-        ))}
+
+          {Object.keys(test.calculation?.derived || {}).length > 0 && (
+            <div className="stage-block">
+              <h4>Calculated intermediate values</h4>
+              <DerivedTable stage={stage} test={test} />
+            </div>
+          )}
+        </div>
+
+        <ResultArea stage={stage} test={test} />
       </div>
 
-      {test.discrepancy && (
-        <p className="physics-discrepancy-line">
-          Discrepancy: {fmt(test.discrepancy.absolute)}
-          {test.discrepancy.relative_valid && test.discrepancy.relative !== null
-            ? ` (${(test.discrepancy.relative * 100).toFixed(1)}% relative, tolerance ${(test.tolerance.relative_tolerance * 100).toFixed(0)}%)`
-            : " (relative discrepancy not mathematically valid here)"}
-        </p>
-      )}
-
-      {test.consistency_checks && test.consistency_checks.length > 0 && (
-        <ul className="physics-consistency-list">
-          {test.consistency_checks.map((c, i) => (
-            <li key={i}>{c}</li>
-          ))}
-        </ul>
-      )}
-
-      {test.missing_data && test.missing_data.length > 0 && (
-        <p className="physics-missing-line">
-          Missing or invalid: <code>{test.missing_data.join(", ")}</code>
-        </p>
-      )}
-
-      <details className="physics-calc-details">
-        <summary>View Calculation Details</summary>
+      <details className="physics-calc-details stage-assumptions">
+        <summary>Assumptions &amp; tolerance rationale</summary>
         <div className="physics-calc-body">
-          <p className="physics-equation"><strong>Equation:</strong> {test.calculation?.equation}</p>
-
-          <h4>Inputs</h4>
-          <div className="table-scroll">
-            <table className="feature-table">
-              <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
-              <tbody>
-                {Object.entries(test.calculation?.inputs || {}).map(([key, m]) => (
-                  <tr key={key}>
-                    <th>{key}</th>
-                    <td className="value">{fmt(m)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {test.calculation?.derived && Object.keys(test.calculation.derived).length > 0 && (
-            <>
-              <h4>Derived Values</h4>
-              <div className="table-scroll">
-                <table className="feature-table">
-                  <thead><tr><th>Quantity</th><th>Value</th></tr></thead>
-                  <tbody>
-                    {Object.entries(test.calculation.derived).map(([key, m]) => (
-                      <tr key={key}>
-                        <th>{key.replace(/_/g, " ")}</th>
-                        <td className="value">{fmt(m)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-
-          <h4>Assumptions</h4>
-          <ul>
-            {test.assumptions.map((a, i) => <li key={i}>{a}</li>)}
-          </ul>
-
-          <h4>Tolerance</h4>
-          <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.85rem" }}>
-            {test.tolerance.relative_tolerance !== null
-              ? `±${(test.tolerance.relative_tolerance * 100).toFixed(0)}% relative discrepancy. `
-              : ""}
+          <ul>{test.assumptions.map((a, i) => <li key={i}>{a}</li>)}</ul>
+          <p className="char-muted" style={{ marginBottom: 0 }}>
+            {test.tolerance.relative_tolerance !== null ? `Tolerance ±${(test.tolerance.relative_tolerance * 100).toFixed(0)}% relative. ` : ""}
             {test.tolerance.rationale}
           </p>
         </div>
       </details>
-    </div>
+    </details>
   );
 }

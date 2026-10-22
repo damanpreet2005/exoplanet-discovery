@@ -51,7 +51,7 @@ describe("zero-manual-entry auto-skip", () => {
     render(<App />);
     fireEvent.click(screen.getByRole("link", { name: /Manual Parameters/i }));
 
-    expect(await screen.findByRole("heading", { name: /Step 3.*Prediction Results/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /Transit Detection & ML Prediction/i })).toBeInTheDocument();
     expect(screen.getByText("Predicted class")).toBeInTheDocument();
   });
 });

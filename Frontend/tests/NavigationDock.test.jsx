@@ -12,9 +12,10 @@ describe("Floating navigation dock", () => {
     const expected = [
       ["Upload & Analyze", "/"],
       ["Manual Parameters", "/manual-parameters"],
-      ["Prediction Results", "/results"],
+      ["Detection & Prediction", "/results"],
       ["Physics Validation", "/physics-validation"],
-      ["Characterisation", "/characterisation"],
+      ["Planet Characterization", "/characterisation"],
+      ["Discovery Report", "/report"],
       ["System Status", "/status"],
     ];
     for (const [label, href] of expected) {

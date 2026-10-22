@@ -127,3 +127,29 @@ export async function runPhysicsValidation(namedParams, objectId) {
   }
   return body;
 }
+
+/**
+ * Re-runs the planet characterization engine on the report's stored
+ * `inputs` snapshot with expert overrides and/or changed assumptions, via
+ * POST /api/v1/characterization/recompute. No light-curve refit happens; the
+ * backend returns a complete new report. Never computed client-side.
+ *
+ * `modelFeatureEdits` ({submitted, automatic}) forwards edits made in the
+ * 17-parameter Expert Override form; the backend converts the fields that
+ * actually changed into characterization overrides.
+ */
+export async function recomputeCharacterization({ inputs, overrides, config, modelFeatureEdits }) {
+  const requestId = generateRequestId();
+  const body = { inputs, overrides: overrides || {}, config: config || {} };
+  if (modelFeatureEdits) body.model_feature_edits = modelFeatureEdits;
+  const response = await fetch(`${API_BASE_URL}/api/v1/characterization/recompute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+    body: JSON.stringify(body),
+  });
+  const parsed = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw parsed?.error || { code: "UNKNOWN_ERROR", message: "The characterization request failed." };
+  }
+  return parsed;
+}

@@ -7,6 +7,7 @@ const healthRouter = require("./routes/health");
 const predictRouter = require("./routes/predict");
 const schemaRouter = require("./routes/schema");
 const physicsRouter = require("./routes/physics");
+const characterizationRouter = require("./routes/characterization");
 
 function createApp() {
   const app = express();
@@ -22,6 +23,7 @@ function createApp() {
   app.use("/api/v1", predictRouter);
   app.use("/api/v1", schemaRouter);
   app.use("/api/v1", physicsRouter);
+  app.use("/api/v1", characterizationRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

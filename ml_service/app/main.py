@@ -9,9 +9,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.cache import InMemoryTTLCache
 from app.config import get_settings
 from app.errors import (
+    CharacterizationRequestError,
     CsvValidationHTTPError,
     FileTooLargeError,
     ModelUnavailableError,
+    characterization_request_handler,
     csv_validation_handler,
     feature_order_not_configured_handler,
     file_too_large_handler,
@@ -32,7 +34,7 @@ from app.feature_aliases import (
 from app.koi_catalog import KoiCatalogUnavailableError, get_koi_catalog
 from app.logging_config import configure_logging
 from app.model_loader import ModelRegistry
-from app.routers import health, physics, predict, predict_csv, predict_named, schema
+from app.routers import characterization, health, physics, predict, predict_csv, predict_named, schema
 
 logger = logging.getLogger("ml_service")
 
@@ -80,6 +82,7 @@ app.add_middleware(
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(ModelUnavailableError, model_unavailable_handler)
 app.add_exception_handler(CsvValidationHTTPError, csv_validation_handler)
+app.add_exception_handler(CharacterizationRequestError, characterization_request_handler)
 app.add_exception_handler(FileTooLargeError, file_too_large_handler)
 app.add_exception_handler(MissingFeatureError, missing_feature_handler)
 app.add_exception_handler(InvalidFeatureValueError, invalid_feature_value_handler)
@@ -94,6 +97,7 @@ app.include_router(predict_csv.router)
 app.include_router(predict_named.router)
 app.include_router(schema.router)
 app.include_router(physics.router)
+app.include_router(characterization.router)
 
 
 @app.middleware("http")

@@ -25,9 +25,10 @@ import Icon from "./Icon";
 const WORKFLOW_ITEMS = [
   { to: "/", label: "Upload & Analyze", icon: "satellite_alt", end: true },
   { to: "/manual-parameters", label: "Manual Parameters", icon: "tune" },
-  { to: "/results", label: "Prediction Results", icon: "insights" },
+  { to: "/results", label: "Detection & Prediction", icon: "insights" },
   { to: "/physics-validation", label: "Physics Validation", icon: "science" },
-  { to: "/characterisation", label: "Characterisation", icon: "radar" },
+  { to: "/characterisation", label: "Planet Characterization", icon: "radar" },
+  { to: "/report", label: "Discovery Report", icon: "summarize" },
 ];
 
 const SYSTEM_ITEMS = [{ to: "/status", label: "System Status", icon: "monitor_heart" }];

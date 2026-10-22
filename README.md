@@ -71,7 +71,78 @@ Forest    (PyTorch)
 | 16 | `median_cadence_days` | Median spacing between consecutive time samples |
 | 17 | `point_to_point_scatter_ppm` | RMS of consecutive-point flux differences (high-frequency noise) |
 
-Because none of this was verifiable against an original training pipeline, every prediction response includes an explicit `warnings` field saying so — this is exploratory, not scientifically validated, output. `characterisation` in the response is real, computed transit-vetting data (odd/even ratio, secondary eclipse depth, etc.) — it deliberately does **not** claim physical planet properties (radius, mass, temperature), since those would require stellar parameters this pipeline never asks for.
+Because none of this was verifiable against an original training pipeline, every prediction response includes an explicit `warnings` field saying so — this is exploratory, not scientifically validated, output. `characterisation` in the response is real, computed transit-vetting data (odd/even ratio, secondary eclipse depth, etc.). Physical planet properties are in the separate `characterization` report (see Planet Characterization Engine below), which uses the Object ID's catalogue stellar parameters.
+
+## Planet Characterization Engine
+
+`ml_service/app/characterization/` turns the uploaded light curve plus the KOI catalogue entry into a physical, orbital and stellar characterization. It is **separate from the 17-feature ML vector**: ML features are classifier inputs (`features` in the response), characterization parameters are physical outputs (`characterization`).
+
+### Data flow
+
+```
+light curve ─ BLS (existing) ─► seed ephemeris ─► transit_fit.py ─► fitted (t0, P, k, a/R*, b²) + covariance
+                                                                  + individual transit times + linear ephemeris
+Object ID ─ stellar_catalog_service.py (existing) ─► KOI row(s) ─► Teff, log g, R* with _err1/_err2
+                                                                  + reference KOI values (cross-check only)
+inputs snapshot + expert overrides + assumptions ─► engine.py ─► report (JSON)
+```
+
+The fit runs once, in the existing `asyncio.to_thread` upload path (≈0.2–2 s). Recomputing with overrides reuses the stored `inputs` snapshot and only re-runs the engine (≈10 ms), via `POST /characterization/recompute` (gateway: `POST /api/v1/characterization/recompute`), cached by a content hash of inputs + overrides + config.
+
+| Module | Role |
+|---|---|
+| `transit_model.py` | Quadratic-limb-darkened, circular-orbit transit model (numerical integration over the occulted annuli; verified against the exact uniform-disk solution to < 1e-4 of the depth), finite-exposure supersampling |
+| `transit_fit.py` | Local detrending, empirical noise, bounded least-squares fit, red-noise β, per-transit timing, linear ephemeris and O−C χ² test |
+| `physics.py` | Physical relations (vectorised for Monte Carlo) |
+| `uncertainty.py` | Split-normal / correlated multivariate sampling, analytic power-law propagation, uncertainty-based rounding |
+| `classification.py` | Configurable, referenced classification rules |
+| `engine.py` | Dependency graph, provenance, reliability, overrides, consistency checks, report assembly |
+| `planet_characterization.py` | Public interface: `characterize_light_curve(...)`, `recompute_characterization(...)` |
+
+### Equations
+
+| Quantity | Relation |
+|---|---|
+| Radius ratio k | Fitted with the limb-darkened model (√depth only as a flagged fallback if the fit fails) |
+| Transit depth | Model depth at mid-transit (ppm and fraction); BLS box depth reported separately |
+| T14, T23 | Winn (2010) eqs. 14–15 |
+| SNR | δ / (σ₁ β) · √N_in (σ₁ from out-of-transit point-to-point scatter; β red-noise factor) |
+| Planet radius | Rp = k R* |
+| Stellar mass | M* = g R*² / G (catalogue log g, R*) |
+| Luminosity | L* = (R*/R☉)² (Teff / 5772 K)⁴ |
+| Semi-major axis | Kepler III: a = [G(M*+Mp)P²/4π²]^⅓; falls back to (a/R*)·R* if M* is unavailable |
+| Inclination | cos i = (b R*/a)(1+e sin ω)/(1−e²) |
+| Transit stellar density | ρ* = 3π(a/R*)³/(GP²) — cross-checked against the catalogue density |
+| Insolation | S = L*/a² / √(1−e²) |
+| Equilibrium temperature | Teq = Teff √(R*/a) [f(1−A)]^¼ (1−e²)^(−⅛); A = 0.3, f = ¼ by default (NASA `koi_teq` convention), configurable; systematic range over A = 0–0.7 and f = ¼ / ⅔ reported separately |
+| Planet mass | Chen & Kipping (2017) relation incl. intrinsic scatter — labelled `model_estimated`; unavailable above ~14.3 R⊕ (Jovian degeneracy). A measured mass can be supplied by override |
+| Density, gravity, escape velocity | From mass and radius (inherit `model_estimated` unless the mass is measured) |
+| Habitable zone | Kopparapu et al. (2014), 1 M⊕, 2600–7200 K |
+
+Every parameter carries value, unit, provenance (`catalog`, `observed`, `fitted`, `derived`, `model_estimated`, `manual_override`, `assumed`, `unavailable`), uncertainty (method, interval, completeness, excluded inputs, systematics), method, equation, assumptions, `depends_on`, `depends_on_override`, the original value when overridden, a calculation `status` and a separate scientific `reliability` (`reliable` / `low_confidence` / `unreliable`). Missing values are `null`, never 0. Values are rounded to the precision their uncertainty supports.
+
+### Catalogue integration
+
+Local `ml_service/data/koi_catalog.csv` only (no network calls). Identifiers: KIC (`KIC 10797460`), KOI (`K00752.01`, `KOI-752.01`), Kepler name (`Kepler-227 b`), and TCE (`010797460-01`, `KIC 10797460 TCE 1`). For a KIC with several KOIs, stellar values are shared and the reference KOI is the one whose period matches the light curve within 1%. The snapshot has no metallicity, stellar mass, luminosity, density or distance columns: mass, luminosity and density are derived (and flagged), metallicity and distance are `unavailable` and can be supplied by override. Catalogue planet values (`koi_period`, `koi_depth`, `koi_prad`, `koi_teq`, …) are never used as results, only in the catalogue-comparison table. The one exception: if the BLS-seeded fit is not significant or disagrees with the catalogue period, a second fit is seeded from the catalogue ephemeris and kept only if it is significant and better. The seed used is recorded, and the fitted values are still measured from the light curve.
+
+### Expert overrides
+
+Overridable inputs (with physical range validation): orbital period, epoch, depth, duration, impact parameter, radius ratio, a/R*, stellar radius / Teff / log g / mass / metallicity / luminosity, distance, planet radius / mass, eccentricity, argument of periastron, semi-major axis, Teq, insolation. Plus Bond albedo and heat redistribution as assumptions. Overrides cut a node's upstream edges and never propagate backwards; the graph is checked to be acyclic at import. Edits made in the existing 17-parameter Expert Override form are forwarded automatically (only fields that actually changed). The report lists `recomputed_outputs`; "Restore automatic values" drops all overrides.
+
+### Verification
+
+- Engine physics reproduces NASA's own `koi_teq` for 9,200 KOIs (median deviation 0.03%) and `koi_insol` (median 0.8%) — `tests/test_characterization_physics.py`.
+- Injection–recovery tests (period, k, epoch within 3σ; χ²ν ≈ 1; SNR scaling; TTV detection; single transit; grazing; red noise) — `tests/test_transit_model_fit.py`.
+- Real Kepler-452 b PDCSAP light curve (62k points, `Object ID = Kepler-452 b`): P = 384.8484 ± 0.0073 d (catalogue 384.8476), 4 transits, SNR 13.9, Rp = 1.22 R⊕ (catalogue 1.09), Teq = 229 K (catalogue 220 K), estimated position in the conservative HZ.
+
+### Limitations
+
+- Circular orbit assumed unless e is supplied; photometry cannot constrain e.
+- Limb darkening fixed (u1 = 0.40, u2 = 0.26), not Teff-dependent or fitted.
+- Uncertainties from the linearised fit covariance (truncated to physical bounds), not MCMC; b–a/R* degeneracies are flagged rather than fully explored.
+- No dilution / third-light correction; time column assumed to be days.
+- The existing BLS search runs on un-detrended flux and can lock onto instrumental features (e.g. Kepler quarter jumps); the engine flags insignificant fits and can recover via the catalogue ephemeris.
+- `app/feature_engine.py` computes the ML feature `koi_teq` with Bond albedo 0, while NASA's `koi_teq` (the model's training data) uses 0.3 — ~9% hotter than the training convention. Left unchanged here because it alters ML predictions.
 
 ## Project Structure
 
@@ -220,9 +291,9 @@ docker compose up --build
 
 | Suite | Command | Result |
 |---|---|---|
-| ML service (pytest) | `cd ml_service && pytest` | 39 passed |
-| Backend gateway (jest) | `cd Backend && npm test` | 12 passed |
-| Frontend (vitest) | `cd Frontend && npm test` | 6 passed |
+| ML service (pytest) | `cd ml_service && pytest` | 292 passed (97 characterization) |
+| Backend gateway (jest) | `cd Backend && npm test` | 35 passed |
+| Frontend (vitest) | `cd Frontend && npm test` | 48 passed |
 
 Covers: valid/invalid/empty/malformed light-curve CSVs, missing `time`/`flux` columns, too few data points, a synthetic light curve with a known injected transit (verifies BLS recovers the injected period, and that the odd/even depth ratio stays near 1.0 with no spurious secondary eclipse for a genuine planet-like signal), model loading, RobustScaler math, RF/CNN weighted fusion math, cache hit/miss, ML-service-unavailable, timeout, retry-then-succeed, 4xx-not-retried, and structured error responses that don't leak internals.
 
@@ -243,7 +314,8 @@ Verified live (real running services, real `.pkl`, not mocked): a synthetic 60-d
 | React frontend | ✅ |
 | Caching, request IDs, timeouts, retries, health/ready, structured errors | ✅ |
 | Characterisation (transit vetting: odd/even ratio, secondary eclipse) | ✅ real computed diagnostics |
-| Physics validation | 🔭 Not implemented — explicit "not_implemented" status in the API and UI |
+| Physics validation | ✅ Stage 2 consistency checks |
+| Planet characterization engine | ✅ transit fit, physical/orbital/stellar parameters, uncertainties, provenance, overrides |
 
 ## Team
 

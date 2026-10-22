@@ -3,7 +3,9 @@
  * service. Applies a request timeout so a hung ML service can never hang the
  * gateway, and a small bounded retry policy for transient failures only
  * (network errors, timeouts, and 502/503/504 upstream errors). Deterministic
- * 4xx errors (validation failures) are never retried.
+ * 4xx errors (validation failures) are never retried. A timed-out CSV
+ * analysis is not retried either: the ML service keeps computing the aborted
+ * request, so a retry would only add a second CPU-bound job.
  *
  * Uses Node's built-in fetch/FormData/Blob (Node >= 18) -- no HTTP client
  * dependency needed.
@@ -54,11 +56,11 @@ async function forwardCsvPrediction({ buffer, filename, mimetype, requestId, obj
       response = await fetchWithTimeout(
         `${config.mlServiceUrl}/predict/csv`,
         { method: "POST", body: form, headers: { "X-Request-Id": requestId } },
-        config.mlServiceTimeoutMs
+        config.mlServiceAnalysisTimeoutMs
       );
     } catch (err) {
       const isAbort = err.name === "AbortError";
-      if (attempt >= maxAttempts) {
+      if (isAbort || attempt >= maxAttempts) {
         logger.error(isAbort ? "ml_service_timeout" : "ml_service_unreachable", { request_id: requestId });
         throw isAbort ? new MLServiceTimeoutError() : new MLServiceUnavailableError();
       }
@@ -191,6 +193,58 @@ async function forwardPhysicsValidation(namedParams, requestId) {
   throw new MLServiceUnavailableError();
 }
 
+/**
+ * Forwards a characterization recompute request ({inputs, overrides, config,
+ * model_feature_edits}) to the ML service's POST /characterization/recompute.
+ * Invalid overrides come back as 422 and are passed through unchanged; only
+ * transport-level failures are retried.
+ */
+async function forwardCharacterizationRecompute(body, requestId) {
+  const maxAttempts = config.mlServiceMaxRetries + 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetchWithTimeout(
+        `${config.mlServiceUrl}/characterization/recompute`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
+        },
+        config.mlServiceTimeoutMs
+      );
+    } catch (err) {
+      const isAbort = err.name === "AbortError";
+      if (attempt >= maxAttempts) {
+        logger.error(isAbort ? "ml_service_timeout" : "ml_service_unreachable", { request_id: requestId });
+        throw isAbort ? new MLServiceTimeoutError() : new MLServiceUnavailableError();
+      }
+      await sleep(config.mlServiceRetryBackoffMs * 2 ** (attempt - 1));
+      continue;
+    }
+
+    if (response.ok) {
+      return response.json();
+    }
+
+    if (response.status === 422 || response.status === 400) {
+      const errorBody = await response.json().catch(() => null);
+      throw new UpstreamValidationError(response.status, errorBody);
+    }
+
+    if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < maxAttempts) {
+      await sleep(config.mlServiceRetryBackoffMs * 2 ** (attempt - 1));
+      continue;
+    }
+
+    logger.error("ml_service_error", { request_id: requestId, status_code: response.status });
+    throw new MLServiceUnavailableError();
+  }
+
+  throw new MLServiceUnavailableError();
+}
+
 async function fetchFeatureSchema() {
   const response = await fetchWithTimeout(`${config.mlServiceUrl}/feature-schema`, { method: "GET" }, 5000);
   if (!response.ok) {
@@ -212,6 +266,7 @@ module.exports = {
   forwardCsvPrediction,
   forwardNamedPrediction,
   forwardPhysicsValidation,
+  forwardCharacterizationRecompute,
   fetchFeatureSchema,
   checkReady,
 };

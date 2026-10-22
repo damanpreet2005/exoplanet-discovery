@@ -1,5 +1,10 @@
+import os
 import sys
 from pathlib import Path
+
+# Tests never reach the NASA Exoplanet Archive; characterization enrichment is
+# exercised with injected lookup results instead.
+os.environ.setdefault("CHARACTERIZATION_ARCHIVE_LOOKUP", "0")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

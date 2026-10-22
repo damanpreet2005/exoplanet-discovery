@@ -102,8 +102,10 @@ def test_unresolvable_object_id_returns_analysis_not_a_prediction(client):
     # koi_prad/koi_teq/koi_insol cascade to unavailable without koi_srad/koi_steff.
     for canonical in ("koi_prad", "koi_teq", "koi_insol"):
         assert features[canonical]["status"] == "unavailable"
+    # koi_impact too: with no catalogue match there is neither a catalogue b
+    # nor a stellar-density prior to constrain a fitted one.
     assert set(body["missing_features"]) == {
-        "koi_score", "koi_prad", "koi_teq", "koi_insol", "koi_steff", "koi_slogg", "koi_srad",
+        "koi_score", "koi_impact", "koi_prad", "koi_teq", "koi_insol", "koi_steff", "koi_slogg", "koi_srad",
         "ra", "dec", "koi_kepmag",
     }
 
@@ -162,7 +164,9 @@ def test_csv_with_valid_object_id_runs_the_real_prediction_with_zero_manual_entr
     assert features["koi_steff"]["value"] == pytest.approx(5455.0)
     assert features["koi_period"]["status"] == "estimated"
     assert features["koi_prad"]["status"] == "derived"
-    assert features["koi_impact"]["status"] == "estimated"
+    # Matched KOI: the catalogue impact parameter, not a light-curve shape estimate.
+    assert features["koi_impact"]["status"] == "catalog"
+    assert features["koi_impact"]["value"] == pytest.approx(0.146)
 
 
 def test_tic_object_id_is_rejected_not_silently_mismatched(client):

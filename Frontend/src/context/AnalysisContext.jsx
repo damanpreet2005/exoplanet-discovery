@@ -1,5 +1,10 @@
 import { createContext, useContext, useState, useCallback } from "react";
-import { uploadCsvForAnalysis, submitManualParameters, runPhysicsValidation as runPhysicsValidationApi } from "../api/client";
+import {
+  uploadCsvForAnalysis,
+  submitManualParameters,
+  runPhysicsValidation as runPhysicsValidationApi,
+  recomputeCharacterization as recomputeCharacterizationApi,
+} from "../api/client";
 
 const AnalysisContext = createContext(null);
 
@@ -31,6 +36,39 @@ export const PHYSICS_STATUS = {
   SUCCESS: "success",
   ERROR: "error",
 };
+
+// Planet characterization recomputation (expert overrides / assumptions).
+// The base report arrives with the light-curve upload; a recomputed report
+// replaces it for display until the automatic values are restored.
+export const CHARACTERIZATION_STATUS = {
+  IDLE: "idle",
+  RUNNING: "running",
+  SUCCESS: "success",
+  ERROR: "error",
+};
+
+// 17-parameter form fields that are also characterization inputs (mirrors
+// MODEL_FEATURE_TO_PARAMETER in ml_service/app/characterization/engine.py).
+// Used only to decide whether a recompute request is needed at all; the
+// backend does the actual mapping.
+const CHARACTERIZATION_FEATURES = [
+  "koi_period", "koi_time0bk", "koi_duration", "koi_depth", "koi_impact", "koi_prad",
+  "koi_teq", "koi_insol", "koi_srad", "koi_steff", "koi_slogg",
+];
+
+function automaticFeatureValues(lightCurveResult) {
+  const out = {};
+  for (const [canonical, fv] of Object.entries(lightCurveResult?.features || {})) out[canonical] = fv.value;
+  return out;
+}
+
+function hasCharacterizationEdits(submitted, automatic) {
+  return CHARACTERIZATION_FEATURES.some((key) => {
+    if (submitted?.[key] === undefined || submitted[key] === null) return false;
+    const auto = automatic[key];
+    return auto === null || auto === undefined || Math.abs(Number(submitted[key]) - Number(auto)) > 1e-9 * Math.max(1, Math.abs(Number(auto)));
+  });
+}
 
 const SESSION_STORAGE_KEY = "exoplanet_prediction_session_v1";
 
@@ -100,6 +138,66 @@ export function AnalysisProvider({ children }) {
   const [physicsError, setPhysicsError] = useState(null);
   const [physicsCandidateKey, setPhysicsCandidateKey] = useState(persisted.physicsCandidateKey || null);
 
+  // ---- Planet characterization (recomputed report; base is result.characterization) ----
+  const [charReport, setCharReport] = useState(persisted.characterizationReport || null);
+  const [charOverrides, setCharOverrides] = useState(persisted.characterizationOverrides || {});
+  const [charConfig, setCharConfig] = useState(persisted.characterizationConfig || {});
+  const [charModelEdits, setCharModelEdits] = useState(persisted.characterizationModelEdits || null);
+  const [charStatus, setCharStatus] = useState(
+    persisted.characterizationReport ? CHARACTERIZATION_STATUS.SUCCESS : CHARACTERIZATION_STATUS.IDLE
+  );
+  const [charError, setCharError] = useState(null);
+
+  const resetCharacterization = useCallback(() => {
+    setCharReport(null);
+    setCharOverrides({});
+    setCharConfig({});
+    setCharModelEdits(null);
+    setCharStatus(CHARACTERIZATION_STATUS.IDLE);
+    setCharError(null);
+  }, []);
+
+  /** Recomputes the characterization for the current light curve. Any
+   * argument left undefined keeps its current value. */
+  const runCharacterization = useCallback(async ({ overrides, config, modelFeatureEdits } = {}, baseResult) => {
+    const base = (baseResult || result)?.characterization;
+    if (!base?.inputs) return;
+    const nextOverrides = overrides === undefined ? charOverrides : overrides;
+    const nextConfig = config === undefined ? charConfig : config;
+    const nextEdits = modelFeatureEdits === undefined ? charModelEdits : modelFeatureEdits;
+    setCharStatus(CHARACTERIZATION_STATUS.RUNNING);
+    setCharError(null);
+    try {
+      const body = await recomputeCharacterizationApi({
+        inputs: base.inputs, overrides: nextOverrides, config: nextConfig, modelFeatureEdits: nextEdits,
+      });
+      // The snapshot is already stored with the base report; don't store it twice.
+      const { inputs: _omit, ...report } = body;
+      setCharReport(report);
+      setCharOverrides(nextOverrides);
+      setCharConfig(nextConfig);
+      setCharModelEdits(nextEdits);
+      setCharStatus(CHARACTERIZATION_STATUS.SUCCESS);
+      persistSession({
+        characterizationReport: report, characterizationOverrides: nextOverrides,
+        characterizationConfig: nextConfig, characterizationModelEdits: nextEdits,
+      });
+    } catch (err) {
+      setCharError(err);
+      setCharStatus(CHARACTERIZATION_STATUS.ERROR);
+    }
+  }, [result, charOverrides, charConfig, charModelEdits]);
+
+  /** Restores every automatically resolved value (drops all overrides,
+   * including edits made in the 17-parameter form, and default assumptions). */
+  const restoreCharacterization = useCallback(() => {
+    resetCharacterization();
+    persistSession({
+      characterizationReport: null, characterizationOverrides: {}, characterizationConfig: {},
+      characterizationModelEdits: null,
+    });
+  }, [resetCharacterization]);
+
   const analyze = useCallback(async (file, objectId) => {
     setStatus(STATUS.UPLOADING);
     setProgress(0);
@@ -118,6 +216,7 @@ export function AnalysisProvider({ children }) {
     setPhysicsResult(null);
     setPhysicsError(null);
     setPhysicsCandidateKey(null);
+    resetCharacterization();
     clearPersistedSession();
 
     try {
@@ -135,7 +234,7 @@ export function AnalysisProvider({ children }) {
       setError(err);
       setStatus(STATUS.ERROR);
     }
-  }, []);
+  }, [resetCharacterization]);
 
   const submitCombinedPrediction = useCallback(async (values) => {
     setFinalStatus(FINAL_STATUS.SUBMITTING);
@@ -153,11 +252,20 @@ export function AnalysisProvider({ children }) {
       setPhysicsError(null);
       setPhysicsCandidateKey(null);
       persistSession({ manualParameters: values, finalResult: body, physicsResult: null, physicsCandidateKey: null });
+      // Physical parameters edited in the form (e.g. a corrected stellar
+      // radius) must also drive the characterization, so its report stays
+      // consistent with what the expert entered.
+      const automatic = automaticFeatureValues(result);
+      if (hasCharacterizationEdits(values, automatic)) {
+        runCharacterization({ modelFeatureEdits: { submitted: values, automatic } });
+      } else if (charModelEdits) {
+        runCharacterization({ modelFeatureEdits: null });
+      }
     } catch (err) {
       setFinalError(err);
       setFinalStatus(FINAL_STATUS.ERROR);
     }
-  }, []);
+  }, [result, runCharacterization, charModelEdits]);
 
   /**
    * Used only when the CSV-upload response already reached
@@ -217,8 +325,9 @@ export function AnalysisProvider({ children }) {
     setPhysicsResult(null);
     setPhysicsError(null);
     setPhysicsCandidateKey(null);
+    resetCharacterization();
     clearPersistedSession();
-  }, []);
+  }, [resetCharacterization]);
 
   // True only when physicsResult was actually computed for the candidate
   // currently shown on the results page -- false after a new prediction
@@ -235,6 +344,15 @@ export function AnalysisProvider({ children }) {
         acceptExtractedPrediction,
         physicsStatus, physicsResult, physicsError, startPhysicsValidation,
         physicsResultIsCurrent,
+        characterization: charReport || result?.characterization || null,
+        baseCharacterization: result?.characterization || null,
+        characterizationStatus: charStatus,
+        characterizationError: charError,
+        characterizationOverrides: charOverrides,
+        characterizationConfig: charConfig,
+        characterizationModelEdits: charModelEdits,
+        runCharacterization,
+        restoreCharacterization,
       }}
     >
       {children}
