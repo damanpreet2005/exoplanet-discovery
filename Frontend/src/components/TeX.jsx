@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -7,7 +8,11 @@ import "katex/dist/katex.min.css";
  * the raw source rather than throwing, so a typo can never blank a page.
  */
 export default function TeX({ math, block = false, className = "" }) {
-  const html = katex.renderToString(math, { displayMode: block, throwOnError: false, strict: "ignore" });
+  // Typesetting is the most expensive render in the app; redo it only when the expression changes.
+  const html = useMemo(
+    () => katex.renderToString(math, { displayMode: block, throwOnError: false, strict: "ignore" }),
+    [math, block]
+  );
   const Tag = block ? "div" : "span";
   return <Tag className={`tex${block ? " tex-block" : ""}${className ? ` ${className}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
