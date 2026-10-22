@@ -6,7 +6,7 @@ evidence and catalogue-informed classification.
 import math
 
 import numpy as np
-import pandas as pd
+import csv
 import pytest
 
 from app.feature_aliases import MODEL_FEATURE_ORDER
@@ -36,9 +36,10 @@ def features(values):
 
 def test_koi_score_nearly_determines_the_catalogue_disposition():
     """Backs the UI statement that koi_score alone matches NASA's disposition for ~98% of KOIs."""
-    cat = pd.read_csv("data/koi_catalog.csv", comment="#")
-    cat = cat[cat.koi_score.notna()]
-    agree = ((cat.koi_score >= 0.5) == cat.koi_disposition.isin(["CONFIRMED", "CANDIDATE"])).mean()
+    with open("data/koi_catalog.csv") as fh:
+        rows = [r for r in csv.DictReader(line for line in fh if not line.startswith("#")) if r["koi_score"]]
+    agree = np.mean([(float(r["koi_score"]) >= 0.5) == (r["koi_disposition"] in ("CONFIRMED", "CANDIDATE"))
+                     for r in rows])
     assert 0.97 < agree < 0.99
 
 
