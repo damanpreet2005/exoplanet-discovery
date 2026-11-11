@@ -245,6 +245,9 @@ describe("login", () => {
     expect(within(dock).getByRole("link", { name: "System Status" })).toHaveAttribute("href", "/status");
 
     // The access token is sent as a Bearer header and never written to web storage.
+    // The dashboard heading renders before its profile request (sent from an
+    // effect after the token is resolved), so wait for the request itself.
+    await waitFor(() => expect(callsTo(fetchMock, "GET", "/api/v1/auth/me")).toHaveLength(1));
     const [, meOptions] = callsTo(fetchMock, "GET", "/api/v1/auth/me")[0];
     expect(meOptions.headers.Authorization).toBe("Bearer header.payload.signature");
     expect(setItem).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining("header.payload.signature"));

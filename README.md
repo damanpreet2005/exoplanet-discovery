@@ -160,8 +160,8 @@ Configuration (`config` on `POST /characterization/recompute`; reported back und
 |---|---|---|
 | `mcmc_samples` | 4000 | Retained draws, pooled over chains (`mc_samples` is accepted as a deprecated alias) |
 | `mcmc_chains` | 16 | Independent chains per block |
-| `mcmc_burn_in` | 400 | Discarded iterations per chain (proposal adaptation happens only here) |
-| `mcmc_thin` | 2 | Keep every n-th post-burn-in draw |
+| `mcmc_burn_in` | 1000 | Discarded iterations per chain (proposal adaptation happens only here) |
+| `mcmc_thin` | 4 | Keep every n-th post-burn-in draw |
 | `mcmc_rhat_threshold` | 1.05 | Maximum split-R̂ for convergence |
 | `mcmc_min_ess` | 200 | Minimum effective sample size for convergence |
 | `random_seed` | 20240601 | Seed; identical inputs + config give identical reports |
