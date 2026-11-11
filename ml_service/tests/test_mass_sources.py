@@ -139,7 +139,7 @@ def test_6_missing_planet_mass_uses_chen_kipping(inputs):
     rep = recompute_characterization(inputs)
     m = P(rep, "planet_mass")
     assert m["evidence"] == "model_estimated" and "Chen & Kipping" in m["method"]
-    assert m["uncertainty"]["method"] == "monte_carlo"
+    assert m["uncertainty"]["method"] == "mcmc"
 
 
 def test_7_missing_planet_radius_prevents_a_mass_estimate(inputs):

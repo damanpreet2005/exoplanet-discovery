@@ -2,6 +2,10 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 import App from "../src/App";
 
+// The analysis workflow requires a signed-in user; these tests cover the
+// workflow itself, so they run as one (see helpers/signedInAuth.jsx).
+vi.mock("../src/context/AuthContext", () => import("./helpers/signedInAuth.jsx"));
+
 const SESSION_KEY = "exoplanet_prediction_session_v1";
 
 // The Physics Validation dashboard typesets every equation with KaTeX -- the

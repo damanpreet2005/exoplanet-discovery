@@ -1,8 +1,8 @@
 """
 Physical and orbital relations used by the characterization engine.
 
-Every function accepts floats or numpy arrays (so the Monte Carlo can push
-thousands of samples through the same code that produces the central value)
+Every function accepts floats or numpy arrays (so the MCMC samples can be
+pushed, thousands at a time, through the same code that produces the central value)
 and returns NaN -- never 0 or a fabricated fallback -- where an input is
 outside the relation's domain. Units are in each docstring. Constants are
 shared with app/astrophysics.py so the physics-validation stage and this

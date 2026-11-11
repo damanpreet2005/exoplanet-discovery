@@ -39,6 +39,13 @@ class Settings:
         "KOI_CATALOG_PATH", str(SERVICE_ROOT / "data" / "koi_catalog.csv")
     )
 
+    # Kepler-band quadratic limb-darkening table, built offline with ExoCTK
+    # on the ATLAS9 grid (scripts/build_limb_darkening_table.py); read and
+    # interpolated by app/characterization/limb_darkening.py.
+    limb_darkening_table_path: str = os.getenv(
+        "LIMB_DARKENING_TABLE_PATH", str(SERVICE_ROOT / "data" / "limb_darkening_kepler_atlas9.csv")
+    )
+
     # NASA Exoplanet Archive TAP (Table Access Protocol) sync endpoint --
     # the Archive's own supported programmatic interface, no API key
     # required. Configurable so a different mirror/environment can be

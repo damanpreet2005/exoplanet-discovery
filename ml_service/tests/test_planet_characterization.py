@@ -28,11 +28,15 @@ from app.characterization.engine import (
 )
 from app.characterization.models import PROVENANCES
 from app.characterization.planet_characterization import build_inputs, catalog_stellar_density
+from app.characterization.limb_darkening import kepler_quadratic
 from app.characterization.transit_model import transit_flux
 from app.lightcurve_extraction import compute_feature_vector
 from app.stellar_catalog_service import resolve_object_id
 
 TRUTH = dict(t0=170.5387, period=9.488036, k=0.0225, a_rs=19.78, b=0.15)
+# The pipeline fits K00752.01 (catalogue Teff 5455 K, log g 4.467) with its
+# tabulated limb darkening, so the synthetic transits use the same coefficients.
+LD = kepler_quadratic(5455.0, 4.467)
 R_SUN_IN_EARTH = 6.957e8 / 6.371e6
 REQUIRED_KEYS = {"name", "label", "value", "unit", "provenance", "status", "reliability", "uncertainty", "method",
                  "assumptions", "depends_on", "validation", "missing_inputs", "reason", "depends_on_override",
@@ -42,7 +46,7 @@ REQUIRED_KEYS = {"name", "label", "value", "unit", "provenance", "status", "reli
 def _lightcurve(seed=3, baseline=100.0):
     rng = np.random.default_rng(seed)
     t = np.arange(130.0, 130.0 + baseline, 0.0204)
-    f = transit_flux(t, TRUTH["t0"], TRUTH["period"], TRUTH["k"], TRUTH["a_rs"], TRUTH["b"], 0.4, 0.26, 0.0204, 7)
+    f = transit_flux(t, TRUTH["t0"], TRUTH["period"], TRUTH["k"], TRUTH["a_rs"], TRUTH["b"], LD["u1"], LD["u2"], 0.0204, 7)
     return t, f + rng.normal(0.0, 1.5e-4, t.size)
 
 
@@ -59,7 +63,7 @@ def sc_lc():
     light-curve-only stellar density is constrained."""
     rng = np.random.default_rng(7)
     t = np.arange(150.0, 190.0, 0.000694)
-    f = transit_flux(t, TRUTH["t0"], TRUTH["period"], TRUTH["k"], TRUTH["a_rs"], TRUTH["b"], 0.4, 0.26)
+    f = transit_flux(t, TRUTH["t0"], TRUTH["period"], TRUTH["k"], TRUTH["a_rs"], TRUTH["b"], LD["u1"], LD["u2"])
     f = f + rng.normal(0.0, 1.5e-4, t.size)
     return t, f, compute_feature_vector(t, f).bls
 
@@ -233,7 +237,7 @@ def test_archive_failure_leaves_values_unavailable(monkeypatch):
 def test_planet_radius_uses_fitted_ratio_and_catalog_radius(report):
     rp = P(report, "planet_radius")
     expected = P(report, "radius_ratio")["value"] * 0.927 * R_SUN_IN_EARTH
-    # The Monte Carlo median sits ~3% above k x R*: R*'s asymmetric catalogue
+    # The MCMC median sits ~3% above k x R*: R*'s asymmetric catalogue
     # interval (+0.105 / -0.061) skews the product upward.
     assert rp["value"] == pytest.approx(expected, rel=0.04)
     assert set(rp["depends_on"]) == {"radius_ratio", "stellar_radius"}
@@ -258,7 +262,7 @@ def test_orbit_and_thermal_match_nasa_conventions(report):
     assert P(report, "insolation")["value"] == pytest.approx(93.6, rel=0.1)
     assert P(report, "semi_major_axis")["value"] == pytest.approx(0.0852, rel=0.03)
     assert P(report, "stellar_mass")["uncertainty"]["method"] == "analytic_first_order"
-    assert P(report, "semi_major_axis")["uncertainty"]["method"] == "monte_carlo"
+    assert P(report, "semi_major_axis")["uncertainty"]["method"] == "mcmc"
 
 
 def test_circular_orbit_is_recorded_not_silent(report):
@@ -312,7 +316,7 @@ def test_folded_light_curve_for_display(report):
     assert all(c >= 3 for c in folded["n_per_bin"])
     assert len(folded["model_phase_hours"]) == len(folded["model_flux_ppm"])
     # Binned data and model both dip at mid-transit by roughly the best-fit depth (ppm; the
-    # reported transit_depth parameter is the Monte Carlo median, so it is not used here).
+    # reported transit_depth parameter is the MCMC median, so it is not used here).
     depth_ppm = report["inputs"]["transit_fit"]["depth"] * 1e6
     mid = min(range(n), key=lambda i: abs(folded["phase_hours"][i]))
     assert folded["flux_ppm"][mid] < -0.5 * depth_ppm
@@ -516,6 +520,42 @@ def test_invalid_config_rejected(report):
         recompute_characterization(report["inputs"], config={"bond_albedo": 1.5})
     with pytest.raises(OverrideValidationError):
         recompute_characterization(report["inputs"], config={"heat_redistribution": "partial"})
+    with pytest.raises(OverrideValidationError):
+        recompute_characterization(report["inputs"], config={"mcmc_chains": 2})
+    with pytest.raises(OverrideValidationError):
+        recompute_characterization(report["inputs"], config={"mcmc_samples": 500, "mcmc_chains": 64})
+
+
+# ---- MCMC sampler ------------------------------------------------------------
+
+def test_sampler_settings_and_diagnostics_are_reported(report):
+    s = report["sampler"]
+    assert s["method"] == "mcmc"
+    assert s["settings"]["retained_samples"] == report["config"]["mcmc_samples"]
+    assert s["settings"]["chains"] == report["config"]["mcmc_chains"]
+    blocks = {b["block"]: b for b in s["blocks"]}
+    fit_block = blocks["transit_fit"]
+    assert fit_block["dimension"] >= 4 and fit_block["rhat"] is not None and fit_block["ess"] is not None
+    assert s["converged"] is True and s["unconverged_blocks"] == []
+    assert all(p["uncertainty"]["converged"] for p in report["parameters"].values() if p["uncertainty"])
+
+
+def test_mc_samples_is_accepted_as_a_deprecated_alias(report):
+    rep = recompute_characterization(report["inputs"], config={"mc_samples": 2000})
+    assert rep["config"]["mcmc_samples"] == 2000 and "mc_samples" not in rep["config"]
+
+
+def test_unconverged_sampling_is_flagged_not_hidden(report):
+    # An ESS threshold equal to the number of retained draws cannot be met by
+    # an autocorrelated chain, so every block is reported as not converged.
+    rep = recompute_characterization(report["inputs"], config={"mcmc_samples": 2000, "mcmc_min_ess": 2000})
+    assert rep["sampler"]["converged"] is False and "transit_fit" in rep["sampler"]["unconverged_blocks"]
+    rp = P(rep, "planet_radius")
+    assert rp["uncertainty"]["converged"] is False
+    assert rp["reliability"] != "reliable" and "convergence" in rp["reason"]
+    assert any("convergence checks" in w for w in rep["warnings"])
+    size = next(c for c in rep["classifications"] if c["name"] == "size_category")
+    assert any("convergence checks" in c for c in size["caveats"])
 
 
 def test_stellar_mass_override_inconsistent_with_logg_is_flagged(report):
@@ -867,3 +907,23 @@ def test_short_cadence_resolves_the_transit_density_and_contains_the_truth(sc_re
     assert lo * 0.9 < truth < hi * 1.1
     check = next(c for c in sc_report["consistency_checks"] if c["check"] == "stellar_density")
     assert check["consistent"] is True
+
+
+# ---- limb darkening (ExoCTK/ATLAS9 table) -------------------------------------
+
+def test_fit_uses_the_host_star_tabulated_limb_darkening(report):
+    ld = report["transit_fit"]["limb_darkening"]
+    assert ld["provenance"] == "exoctk_atlas9"
+    assert (ld["u1"], ld["u2"]) == (LD["u1"], LD["u2"])
+    text = next(a["text"] for a in report["assumptions"] if a["id"] == "limb_darkening_fixed")
+    assert "ExoCTK" in text and "solar [Fe/H]" in text
+
+
+def test_limb_darkening_table_interpolates_and_never_extrapolates():
+    node = kepler_quadratic(5750.0, 4.5, 0.0)
+    assert node == {"u1": 0.443, "u2": 0.232, "teff": 5750.0, "logg": 4.5, "feh": 0.0}  # a grid node, as tabulated
+    mid = kepler_quadratic(5625.0, 4.5, 0.0)
+    lo, hi = kepler_quadratic(5500.0, 4.5, 0.0), node
+    assert mid["u1"] == pytest.approx((lo["u1"] + hi["u1"]) / 2, abs=1e-4)
+    assert kepler_quadratic(3000.0, 4.5) is None and kepler_quadratic(5750.0, 5.5) is None
+    assert kepler_quadratic(None, 4.5) is None

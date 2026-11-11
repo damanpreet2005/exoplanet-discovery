@@ -3,9 +3,11 @@ Characterization engine: turns a characterization *input snapshot* (transit
 fit + catalogue values, see planet_characterization.build_inputs) plus
 optional expert overrides into a full, provenance-tracked report.
 
-This stage is cheap (vectorised Monte Carlo, no fitting), so it can be
-re-run synchronously whenever an override or assumption changes; the
-expensive light-curve fit happens once, upstream, in transit_fit.py.
+This stage is cheap (vectorised MCMC over closed-form input densities, no
+fitting), so it can be re-run synchronously whenever an override or
+assumption changes; the expensive light-curve fit happens once, upstream, in
+transit_fit.py. The sampler (targets, burn-in, convergence checks) is
+documented in uncertainty.py and reported in the report's `sampler` section.
 
 DEPENDENCY GRAPH
 Parameters are computed in a fixed topological order (`_NODE_ORDER`). Each
@@ -40,11 +42,14 @@ from app.characterization.models import (
 )
 from app.characterization.transit_model import central_depth
 from app.characterization.uncertainty import (
-    analytic_power_law, format_measurement, log10_sigma, multivariate_normal, split_normal, summarize,
-    symmetric_sigma,
+    ChainDiagnostics, MCMCSettings, SamplingError, analytic_power_law, format_measurement, log10_sigma,
+    overdispersed_init, run_metropolis, split_normal_log_prob, split_normal_widths, standard_normal_log_prob,
+    summarize, symmetric_sigma,
 )
 
-ENGINE_VERSION = "1.0.0"
+# 1.1.0: uncertainties sampled by MCMC (uncertainty method "mcmc", was
+# "monte_carlo"); `sampler` report section; config mc_samples -> mcmc_*.
+ENGINE_VERSION = "1.1.0"
 SCHEMA_VERSION = 1
 
 
@@ -56,16 +61,28 @@ class OverrideValidationError(ValueError):
 class CharacterizationConfig:
     bond_albedo: float = 0.3                 # NASA KOI koi_teq convention
     heat_redistribution: str = "full"        # "full" (f = 1/4) | "dayside" (f = 2/3)
-    mc_samples: int = 4000
+    # MCMC sampler (see uncertainty.py). mcmc_samples retained draws are
+    # pooled over mcmc_chains chains, after mcmc_burn_in discarded
+    # iterations per chain, keeping every mcmc_thin-th draw.
+    mcmc_samples: int = 4000
+    mcmc_chains: int = 16
+    mcmc_burn_in: int = 400
+    mcmc_thin: int = 2
+    mcmc_rhat_threshold: float = 1.05
+    mcmc_min_ess: int = 200
     random_seed: int = 20240601
     snr_detection_threshold: float = 7.1     # Kepler pipeline multiple-event-statistic threshold
     low_confidence_relative_uncertainty: float = 0.3
     tension_sigma: float = 3.0
 
+    # Deprecated config names still accepted on input.
+    ALIASES = {"mc_samples": "mcmc_samples"}
+
     @classmethod
     def from_dict(cls, data: dict | None) -> "CharacterizationConfig":
         cfg = cls()
         for key, value in (data or {}).items():
+            key = cls.ALIASES.get(key, key)
             if not hasattr(cfg, key):
                 raise OverrideValidationError(f"Unknown configuration option '{key}'.")
             setattr(cfg, key, value)
@@ -75,10 +92,37 @@ class CharacterizationConfig:
         if cfg.heat_redistribution not in physics.HEAT_REDISTRIBUTION_FACTORS:
             raise OverrideValidationError(
                 f"heat_redistribution must be one of {sorted(physics.HEAT_REDISTRIBUTION_FACTORS)}.")
-        if not isinstance(cfg.mc_samples, int) or not (500 <= cfg.mc_samples <= 50000):
-            raise OverrideValidationError("mc_samples must be an integer in [500, 50000].")
+        for key, lo, hi in (("mcmc_samples", 500, 50000), ("mcmc_chains", 4, 64), ("mcmc_burn_in", 100, 20000),
+                            ("mcmc_thin", 1, 50), ("mcmc_min_ess", 50, 50000), ("random_seed", 0, 2 ** 32 - 1)):
+            value = getattr(cfg, key)
+            if not isinstance(value, int) or isinstance(value, bool) or not (lo <= value <= hi):
+                raise OverrideValidationError(f"{key} must be an integer in [{lo}, {hi}].")
+        if not isinstance(cfg.mcmc_rhat_threshold, (int, float)) or isinstance(cfg.mcmc_rhat_threshold, bool) \
+                or not (1.0 < float(cfg.mcmc_rhat_threshold) <= 1.5):
+            raise OverrideValidationError("mcmc_rhat_threshold must be a number in (1, 1.5].")
+        settings = cfg.mcmc_settings()
+        # Split-R-hat needs at least 2 x 2 retained draws per chain; 20 keeps it meaningful.
+        if settings.retained_per_chain < 20:
+            raise OverrideValidationError("mcmc_samples / mcmc_chains must be at least 20 retained draws per chain.")
+        if settings.iterations_per_chain * cfg.mcmc_chains > 1_000_000:
+            raise OverrideValidationError("The MCMC budget (chains x (burn-in + retained x thin)) exceeds 1,000,000 "
+                                          "iterations.")
+        if cfg.mcmc_min_ess > cfg.mcmc_samples:
+            raise OverrideValidationError("mcmc_min_ess cannot exceed mcmc_samples.")
         cfg.bond_albedo = float(cfg.bond_albedo)
+        cfg.mcmc_rhat_threshold = float(cfg.mcmc_rhat_threshold)
         return cfg
+
+    def mcmc_settings(self) -> MCMCSettings:
+        return MCMCSettings(n_samples=self.mcmc_samples, n_chains=self.mcmc_chains, burn_in=self.mcmc_burn_in,
+                            thin=self.mcmc_thin, rhat_threshold=float(self.mcmc_rhat_threshold),
+                            min_ess=self.mcmc_min_ess)
+
+    def sampler_dict(self) -> dict:
+        return {"mcmc_samples": self.mcmc_samples, "mcmc_chains": self.mcmc_chains,
+                "mcmc_burn_in": self.mcmc_burn_in, "mcmc_thin": self.mcmc_thin,
+                "mcmc_rhat_threshold": float(self.mcmc_rhat_threshold), "mcmc_min_ess": self.mcmc_min_ess,
+                "random_seed": self.random_seed}
 
 
 # ---- assumptions -----------------------------------------------------------
@@ -91,13 +135,18 @@ INGRESS_RESOLUTION_FRACTION = 0.5
 LOG_SCALE_PARAMETERS = {"stellar_logg", "stellar_metallicity"}
 
 
-def assumption_texts(cfg: CharacterizationConfig) -> dict[str, str]:
+def assumption_texts(cfg: CharacterizationConfig, ld: dict | None = None) -> dict[str, str]:
+    """`ld` is the transit fit's limb-darkening record (coefficients, provenance, note)."""
     f = physics.HEAT_REDISTRIBUTION_FACTORS[cfg.heat_redistribution]
+    ld = ld or {"u1": 0.40, "u2": 0.26}
+    # The note says where the coefficients came from (host-star table, or the
+    # Sun-like default and why); see planet_characterization._with_stellar_limb_darkening.
+    ld_text = (f"Quadratic limb darkening fixed at u1 = {ld['u1']:g}, u2 = {ld['u2']:g} in the transit fit. "
+               + (ld.get("note") or "Representative Kepler-band values for a Sun-like dwarf; not fitted."))
     return {
         "circular_orbit": "Circular orbit (e = 0) unless an eccentricity is supplied by expert override. Transit "
                           "photometry alone does not constrain eccentricity, so this is an assumption, not a result.",
-        "limb_darkening_fixed": "Quadratic limb darkening fixed at u1 = 0.40, u2 = 0.26 (representative Kepler-band "
-                                "values for a Sun-like dwarf); not fitted.",
+        "limb_darkening_fixed": ld_text,
         "no_dilution": "No third-light dilution: the measured depth is assumed to come from the target star alone.",
         "negligible_planet_mass": "Planet mass neglected in Kepler's third law unless a measured mass is supplied.",
         "stellar_density_prior": "The transit fit uses the catalogue stellar density (from log g and R*) as a "
@@ -118,7 +167,8 @@ def assumption_texts(cfg: CharacterizationConfig) -> dict[str, str]:
                                       "cumulative table (Kepler DR25 stellar properties).",
         "kopparapu_hz": "Habitable-zone boundaries from Kopparapu et al. (2014) for a 1 M_earth planet.",
         "fit_covariance_gaussian": "Transit-fit uncertainties from the linearised covariance at the best fit "
-                                   "(Gaussian approximation), sampled with physical bounds enforced.",
+                                   "(Gaussian approximation), sampled by MCMC with physical bounds enforced; not "
+                                   "a posterior re-fitted to the light curve.",
     }
 
 
@@ -343,12 +393,17 @@ class _Engine:
     def __init__(self, inputs: dict, overrides: dict[str, dict], cfg: CharacterizationConfig):
         self.inputs = inputs
         self.cfg = cfg
-        self.n = cfg.mc_samples
+        self.mcmc = cfg.mcmc_settings()
+        self.n = self.mcmc.n_samples
         self.rng = np.random.default_rng(cfg.random_seed)
         self.overrides = overrides
         self.params: dict[str, Parameter] = {}
         self.samples: dict[str, np.ndarray | None] = {}
         self.fixed: dict[str, set[str]] = {}      # inputs held fixed (no uncertainty) upstream of each param
+        # MCMC blocks upstream of each param whose chains failed or did not
+        # pass the convergence checks.
+        self.unconverged: dict[str, set[str]] = {}
+        self.sampler_blocks: list[ChainDiagnostics] = []
         # Parameters downgraded *only* because their interval is wide. That
         # width is already propagated numerically, so dependents must not
         # inherit the downgrade as well (it would double-count).
@@ -370,12 +425,69 @@ class _Engine:
     def _meta(self, name):
         return PARAM_META[name]
 
-    def _put(self, p: Parameter, samples: np.ndarray | None, fixed: set[str]):
+    def _put(self, p: Parameter, samples: np.ndarray | None, fixed: set[str], unconverged=None):
         if not p.evidence:
             p.evidence = EVIDENCE_BY_PROVENANCE.get(p.provenance, p.provenance)
         self.params[p.name] = p
         self.samples[p.name] = samples
         self.fixed[p.name] = fixed
+        self.unconverged[p.name] = set(unconverged or ())
+
+    # -- MCMC ----------------------------------------------------------------
+    def _run_block(self, block: str, parameters: list[str], target: str, log_prob, center, scale,
+                   transform=None) -> tuple[np.ndarray | None, str]:
+        """Runs one MCMC block and records its diagnostics. Returns (samples
+        n x d, state) with state "converged" | "unconverged" | "failed";
+        samples is None when the block failed."""
+        center = np.atleast_1d(np.asarray(center, dtype=float))
+        scale = np.atleast_2d(np.asarray(scale, dtype=float))
+        try:
+            init = overdispersed_init(center, scale, log_prob, self.mcmc.n_chains, self.rng)
+            samples, diag = run_metropolis(log_prob, init, scale, self.mcmc, self.rng, block=block,
+                                           parameters=parameters, target=target, transform=transform)
+        except SamplingError as err:
+            self.sampler_blocks.append(ChainDiagnostics(block=block, parameters=list(parameters), target=target,
+                                                        dimension=center.size, converged=False,
+                                                        message=f"Sampling failed: {err}."))
+            self.warnings.append(f"MCMC sampling failed for {block} ({err}); see the sampler diagnostics.")
+            return None, "failed"
+        self.sampler_blocks.append(diag)
+        if not diag.converged:
+            self.warnings.append(f"MCMC chains for {block} did not pass the convergence checks ({diag.message}) "
+                                 "Intervals and category shares computed from them are flagged.")
+        return samples, "converged" if diag.converged else "unconverged"
+
+    def _sample_split_normal(self, name: str, value: float, err_plus, err_minus,
+                             block: str | None = None) -> tuple[np.ndarray, str]:
+        """MCMC samples of an input's split-normal distribution. Returns
+        (samples, state); state "fixed" when it has no uncertainty, and the
+        samples are then the value itself (as are they when sampling failed)."""
+        widths = split_normal_widths(err_plus, err_minus)
+        if widths is None:
+            return np.full(self.n, value, dtype=float), "fixed"
+        ep, em = widths
+        samples, state = self._run_block(
+            block or name, [name], f"split normal (mode {value:g}, +{ep:g} / -{em:g})",
+            split_normal_log_prob(value, ep, em), [value], [[0.5 * (ep + em)]])
+        return (np.full(self.n, value, dtype=float) if samples is None else samples[:, 0]), state
+
+    def _sample_standard_normal(self, block: str) -> tuple[np.ndarray, str]:
+        """MCMC samples of a standard-normal latent variable (zeros when sampling failed)."""
+        samples, state = self._run_block(block, [block], "standard normal N(0, 1)", standard_normal_log_prob,
+                                         [0.0], [[1.0]])
+        return (np.zeros(self.n) if samples is None else samples[:, 0]), state
+
+    def _flag_unconverged(self, p: Parameter, blocks: set[str], interval_from_samples: bool):
+        """Marks a parameter computed from non-converged / failed MCMC blocks."""
+        if not blocks:
+            return
+        if interval_from_samples:
+            if p.uncertainty is not None:
+                p.uncertainty.converged = False
+            p.reliability = worst_reliability(p.reliability, LOW)
+            note = (f"Its interval comes from MCMC samples ({', '.join(sorted(blocks))}) that did not pass the "
+                    "convergence checks; treat it as unreliable.")
+            p.reason = (p.reason + " " if p.reason else "") + note
 
     def _unavailable(self, name: str, reason: str, missing=None, depends_on=None):
         label, unit = self._meta(name)
@@ -391,20 +503,26 @@ class _Engine:
 
     def _input(self, name, value, provenance, err_plus=None, err_minus=None, method="", source="",
                assumptions=None, reliability=RELIABLE, reason="", uncertainty_method="catalog",
-               samples=None, validation=None, round_value=True, alternate=None):
+               samples=None, validation=None, round_value=True, alternate=None, unconverged=None):
         label, unit = self._meta(name)
+        sampling_failed = False
         if samples is None:
-            samples = split_normal(value, err_plus, err_minus, self.n, self.rng)
+            block = f"{name} (override)" if provenance == MANUAL_OVERRIDE else name
+            samples, state = self._sample_split_normal(name, value, err_plus, err_minus, block)
+            sampling_failed = state == "failed"
+            unconverged = {block} if state in ("unconverged", "failed") else set()
+        unconverged = set(unconverged or ())
         unc = None
         if uncertainty_method == "fit_covariance" and (err_plus is not None or err_minus is not None):
-            # Report the interval of the physically truncated samples that
-            # every downstream quantity is computed from, so the reported
-            # fit uncertainty and the propagated ones are consistent.
+            # Report the interval of the physically truncated MCMC samples
+            # that every downstream quantity is computed from, so the
+            # reported fit uncertainty and the propagated ones are consistent.
             summ = summarize(samples)
             if summ:
                 value, lo, hi = summ
                 unc = Uncertainty(lower=lo, upper=hi, method=uncertainty_method,
-                                  interval="68% (16th-84th percentile of covariance samples within physical bounds)")
+                                  interval="68% (16th-84th percentile of MCMC samples of the fit covariance within "
+                                           "physical bounds)")
         elif err_plus is not None or err_minus is not None:
             ep = err_plus if err_plus is not None else err_minus
             em = err_minus if err_minus is not None else err_plus
@@ -432,7 +550,14 @@ class _Engine:
                       uncertainty=unc, method=method, source=source, assumptions=list(assumptions or []),
                       reason=reason, validation=list(validation or []), display=disp,
                       alternate_units=alternate(rv) if (alternate and rv is not None) else [])
-        self._put(p, samples, set() if unc else {name})
+        if sampling_failed and unc:
+            # Its own quoted interval stands; dependents list it as excluded (held fixed).
+            p.reason = (p.reason + " " if p.reason else "") + \
+                "MCMC sampling of its uncertainty failed, so it is held fixed in dependent intervals."
+        # A catalogue/override interval is the quoted one, whatever the chains
+        # did; only an interval read off the samples is itself affected.
+        self._flag_unconverged(p, unconverged, interval_from_samples=uncertainty_method == "fit_covariance")
+        self._put(p, samples, set() if (unc and not sampling_failed) else {name}, unconverged)
         if wide:
             self.wide_only.add(name)
 
@@ -457,10 +582,13 @@ class _Engine:
         return True
 
     def _derive(self, name, deps, fn, method, equation, assumptions=(), analytic=None, validate=None,
-                provenance=None, reliability_floor=None, extra_reason="", alternate=None, optional=()):
-        """Computes a derived parameter on every Monte Carlo sample.
+                provenance=None, reliability_floor=None, extra_reason="", alternate=None, optional=(),
+                unconverged=()):
+        """Computes a derived parameter on every retained MCMC sample.
         `fn(samples_dict) -> ndarray`. `analytic(values_dict) -> (value, sigma)`
-        replaces the MC summary for simple power laws of independent inputs."""
+        replaces the sample summary for simple power laws of independent
+        inputs. `unconverged` names extra MCMC blocks used inside `fn`
+        (e.g. a latent scatter) that did not converge."""
         if self._apply_override(name):
             return
         label, unit = self._meta(name)
@@ -477,6 +605,7 @@ class _Engine:
         with np.errstate(all="ignore"):
             samples = np.asarray(fn(S), dtype=float)
         fixed = set().union(*(self.fixed[d] for d in used)) if used else set()
+        uncv = set(unconverged).union(*(self.unconverged.get(d, set()) for d in used))
         dep_params = [self.params[d] for d in used]
 
         if analytic is not None:
@@ -494,14 +623,14 @@ class _Engine:
                                         "(e.g. the geometry admits no transit).", depends_on=used)
                 return
             value, lo, hi = summ
-            unc_method = "monte_carlo"
+            unc_method = "mcmc"
 
         has_unc = lo is not None and hi is not None and (lo > 0 or hi > 0)
         unc = None
         if has_unc:
             unc = Uncertainty(lower=lo, upper=hi, method=unc_method,
                               interval="68% (1 sigma)" if unc_method == "analytic_first_order"
-                              else "68% (16th-84th percentile)",
+                              else "68% (16th-84th percentile of retained MCMC samples)",
                               complete=not fixed, excluded_inputs=sorted(fixed))
         rv, rl, ru, disp = format_measurement(value, lo if has_unc else None, hi if has_unc else None)
         if unc:
@@ -537,7 +666,8 @@ class _Engine:
                       depends_on=used, validation=validation,
                       reason=_dedupe_sentences(reasons), depends_on_override=ov_deps,
                       display=disp, alternate_units=alternate(rv, rl, ru) if alternate else [])
-        self._put(p, samples, fixed)
+        self._flag_unconverged(p, uncv, interval_from_samples=unc_method == "mcmc")
+        self._put(p, samples, fixed, uncv)
         if wide and not validation:
             self.wide_only.add(name)
 
@@ -597,17 +727,24 @@ class _Engine:
         else:
             self._unavailable("transit_depth_bls", "The transit search found no positive transit depth.")
 
-        fit_samples = None
+        fit_samples, fit_state = None, "fixed"
         if self.fit_ok:
-            fit_samples = self._sample_fit()
+            fit_samples, fit_state = self._sample_fit()
+        # Fit-derived quantities are flagged when the fit block's chains failed or did not converge.
+        fit_uc = {"transit_fit"} if fit_state in ("unconverged", "failed") else set()
         p = fit.get("params") or {}
         errs = fit.get("errors") or {}
+        if fit_state == "failed":
+            errs = {}   # no usable samples of the covariance: report no statistical uncertainty
         fit_assumptions = ["circular_orbit", "limb_darkening_fixed", "no_dilution", "time_in_days",
                            "white_noise_empirical", "fit_covariance_gaussian"]
         if fit.get("stellar_density_prior"):
             fit_assumptions.append("stellar_density_prior")
         base_rel, base_reason = self.fit_reliability, self.fit_reason
-        no_cov_reason = "" if errs else "Fit covariance unavailable (degenerate parameters); no statistical uncertainty."
+        no_cov_reason = "" if errs else (
+            "MCMC sampling of the fit covariance failed (see the sampler diagnostics); no statistical uncertainty."
+            if fit_state == "failed" else
+            "Fit covariance unavailable (degenerate parameters); no statistical uncertainty.")
         if self.fit_ok and not errs and base_rel == RELIABLE:
             base_rel = LOW
 
@@ -620,18 +757,18 @@ class _Engine:
                         method="Limb-darkened transit-model fit (reference transit nearest the data midpoint).",
                         source="transit_fit", assumptions=fit_assumptions, reliability=base_rel,
                         reason=base_reason or no_cov_reason, uncertainty_method="fit_covariance",
-                        samples=fit_samples["t0"])
+                        samples=fit_samples["t0"], unconverged=fit_uc)
             self._input("a_over_rstar", p["a_rs"], FITTED, errs.get("a_rs"), errs.get("a_rs"),
                         method="Transit-model fit (circular-orbit equivalent).", source="transit_fit",
                         assumptions=fit_assumptions, reliability=base_rel, reason=base_reason or no_cov_reason,
-                        uncertainty_method="fit_covariance", samples=fit_samples["a_rs"])
+                        uncertainty_method="fit_covariance", samples=fit_samples["a_rs"], unconverged=fit_uc)
             b_s = fit_samples["b"]
             summ = summarize(b_s) if errs else None
             label, unit = self._meta("impact_parameter")
             if summ:
                 v, lo, hi = summ
                 rv, rl, ru, disp = format_measurement(v, lo, hi)
-                unc = Uncertainty(rl, ru, "monte_carlo")
+                unc = Uncertainty(rl, ru, "mcmc", "68% (16th-84th percentile of retained MCMC samples)")
             else:
                 rv, _, _, disp = format_measurement(p["b"])
                 unc = None
@@ -640,10 +777,11 @@ class _Engine:
                 rel = worst_reliability(rel, LOW)
                 reason = (reason + " " if reason else "") + ("Impact parameter poorly constrained (b - a/R* "
                           "degeneracy at this SNR/cadence); dependent geometry is uncertain.")
-            self._put(Parameter(name="impact_parameter", label=label, value=rv, unit=unit, provenance=FITTED,
+            b_param = Parameter(name="impact_parameter", label=label, value=rv, unit=unit, provenance=FITTED,
                                 reliability=rel, uncertainty=unc, method="Transit-model fit (fitted as b^2).",
-                                source="transit_fit", assumptions=fit_assumptions, reason=reason, display=disp),
-                      b_s, set() if unc else {"impact_parameter"})
+                                source="transit_fit", assumptions=fit_assumptions, reason=reason, display=disp)
+            self._flag_unconverged(b_param, fit_uc, interval_from_samples=True)
+            self._put(b_param, b_s, set() if unc else {"impact_parameter"}, fit_uc)
             if not fit.get("period_constrained"):
                 for name in ("a_over_rstar",):
                     self.params[name].reliability = UNRELIABLE
@@ -659,7 +797,7 @@ class _Engine:
                         method=f"Transit-model fit across {fit.get('n_transits_with_data')} observed transits.",
                         source="transit_fit", assumptions=["time_in_days"], reliability=base_rel,
                         reason=base_reason or no_cov_reason, uncertainty_method="fit_covariance",
-                        samples=fit_samples["period"])
+                        samples=fit_samples["period"], unconverged=fit_uc)
         elif reference.get("orbital_period"):
             ref = reference["orbital_period"]
             self._input("orbital_period", ref["value"], CATALOG, ref.get("err_plus"), ref.get("err_minus"),
@@ -678,7 +816,7 @@ class _Engine:
             self._input("radius_ratio", p["k"], FITTED, errs.get("k"), errs.get("k"),
                         method="Transit-model fit with quadratic limb darkening.", source="transit_fit",
                         assumptions=fit_assumptions, reliability=base_rel, reason=base_reason or no_cov_reason,
-                        uncertainty_method="fit_covariance", samples=fit_samples["k"])
+                        uncertainty_method="fit_covariance", samples=fit_samples["k"], unconverged=fit_uc)
         elif fit.get("status") == "failed" and self._ok("transit_depth_bls"):
             # A transit was detected but could not be modelled: fall back to
             # the first-order relation. Never used when no transit was found.
@@ -723,47 +861,49 @@ class _Engine:
         self._apply_override("eccentricity")
         self._apply_override("arg_periastron")
 
-    def _sample_fit(self, fit: dict | None = None) -> dict[str, np.ndarray]:
-        """Joint samples of the fitted parameters from the fit covariance,
-        restricted to the physical domain (k > 0, a/R* > 1, 0 <= b^2 <
-        (1+k)^2). Falls back to the best fit (no spread) without covariance.
-        `fit` defaults to the fit in use; the prior-free fit is passed for
-        the independent transit-only stellar density."""
+    def _sample_fit(self, fit: dict | None = None) -> tuple[dict[str, np.ndarray], str]:
+        """MCMC samples of the fitted parameters: the multivariate normal of
+        the fit covariance (correlations preserved) restricted to the
+        physical domain (k > 0, a/R* > 1, 0 <= b^2 < (1+k)^2). The chain runs
+        in whitened coordinates y, x = best + A y with A A^T = covariance
+        (directions of zero variance are held at the best fit). Without a
+        covariance the best fit is held fixed (no spread). Returns (samples,
+        state), state as in `_run_block`, or "fixed". `fit` defaults to the
+        fit in use."""
         fit = fit or self.fit
         names = fit.get("fitted_names") or []
         p = fit["params"]
         cov = fit.get("covariance")
         out = {n: np.full(self.n, p[n] if n != "b2" else p["b"] ** 2) for n in ("t0", "period", "k", "a_rs", "b2")}
-        if cov:
-            mean = np.array([p[n] for n in names])
-            cov_arr = np.array(cov)
-            accepted = []
-            total, n_acc = 0, 0
-            for _ in range(20):
-                draws = multivariate_normal(mean, cov_arr, self.n, self.rng)
-                d = dict(zip(names, draws.T))
-                k = d.get("k", out["k"][: draws.shape[0]])
-                a = d.get("a_rs", out["a_rs"][: draws.shape[0]])
-                b2 = d.get("b2", out["b2"][: draws.shape[0]])
-                ok = (k > 0) & (a > 1) & (b2 >= 0) & (b2 < (1 + k) ** 2)
-                total += draws.shape[0]
-                accepted.append(draws[ok])
-                n_acc += int(ok.sum())
-                if n_acc >= self.n:
-                    break
-            good = np.concatenate(accepted)[: self.n]
-            if good.shape[0] < self.n:
-                self.warnings.append("Fit-parameter sampling accepted too few physical samples; uncertainties are "
-                                     "approximate.")
-                extra = multivariate_normal(mean, cov_arr, self.n - good.shape[0], self.rng)
-                good = np.vstack([good, extra])
-            for i, n in enumerate(names):
-                out[n] = good[:, i]
-            out["k"] = np.clip(out["k"], 1e-6, None)
-            out["a_rs"] = np.clip(out["a_rs"], 1.0 + 1e-6, None)
-            out["b2"] = np.clip(out["b2"], 0.0, None)
+        state = "fixed"
+        if cov and names:
+            mean = np.array([p[n] for n in names], dtype=float)
+            cov_arr = np.array(cov, dtype=float)
+            w, vecs = np.linalg.eigh(0.5 * (cov_arr + cov_arr.T))
+            keep = w > max(float(w.max()), 0.0) * 1e-12
+            a_mat = vecs[:, keep] * np.sqrt(w[keep])          # d x r
+            idx = {n: i for i, n in enumerate(names)}
+            fixed_vals = {"k": p["k"], "a_rs": p["a_rs"], "b2": p["b"] ** 2}
+
+            def to_x(y):
+                return mean + y @ a_mat.T
+
+            def log_prob(y):
+                x = to_x(y)
+                k, a, b2 = (x[:, idx[n]] if n in idx else fixed_vals[n] for n in ("k", "a_rs", "b2"))
+                ok = np.broadcast_to((k > 0) & (a > 1) & (b2 >= 0) & (b2 < (1 + k) ** 2), y.shape[:1])
+                return np.where(ok, standard_normal_log_prob(y), -np.inf)
+
+            if keep.any():
+                samples, state = self._run_block(
+                    "transit_fit", list(names),
+                    "multivariate normal (fit covariance) restricted to k > 0, a/R* > 1, 0 <= b^2 < (1+k)^2",
+                    log_prob, np.zeros(int(keep.sum())), np.eye(int(keep.sum())), transform=to_x)
+                if samples is not None:
+                    for i, n in enumerate(names):
+                        out[n] = samples[:, i]
         out["b"] = np.sqrt(out["b2"])
-        return out
+        return out, state
 
     # -- derived -----------------------------------------------------------
     def build_derived(self):
@@ -786,7 +926,7 @@ class _Engine:
         self._derive(
             "stellar_density", ["stellar_mass", "stellar_radius"],
             lambda S: physics.stellar_density_from_mass_radius(S["stellar_mass"], S["stellar_radius"]),
-            "Mean density from stellar mass and radius (Monte Carlo: mass and radius are correlated when the mass "
+            "Mean density from stellar mass and radius (MCMC samples: mass and radius are correlated when the mass "
             "is derived from log g).", "rho* = M* / (4/3 pi R*^3)",
         )
 
@@ -807,12 +947,16 @@ class _Engine:
                 a_circ.original = {"value": a_circ.value, "provenance": a_circ.provenance, "display": a_circ.display,
                                    "uncertainty": asdict(a_circ.uncertainty) if a_circ.uncertainty else None}
                 a_circ.value, a_circ.display, a_circ.provenance = rv, disp, DERIVED
-                a_circ.uncertainty = Uncertainty(rl, ru, "monte_carlo")
+                a_circ.uncertainty = Uncertainty(rl, ru, "mcmc", "68% (16th-84th percentile of retained MCMC samples)")
                 a_circ.method = ("Circular-equivalent fitted a/R* scaled by sqrt(1-e^2)/(1+e sin w) for the "
                                  "supplied eccentricity (Kipping 2010).")
                 a_circ.depends_on = ["eccentricity", "arg_periastron"]
                 a_circ.depends_on_override = sorted({"eccentricity", "arg_periastron"} & set(self.overrides))
                 self.samples["a_over_rstar"] = new_s
+                uc = set().union(*(self.unconverged.get(n, set())
+                                   for n in ("a_over_rstar", "eccentricity", "arg_periastron")))
+                self._flag_unconverged(a_circ, uc, interval_from_samples=True)
+                self.unconverged["a_over_rstar"] = uc
         self._apply_override("a_over_rstar")
 
         geom_deps = ["orbital_period", "radius_ratio", "a_over_rstar", "impact_parameter"]
@@ -917,14 +1061,16 @@ class _Engine:
                                   "from radius. A radial-velocity mass can be supplied through Expert Override.",
                                   depends_on=["planet_radius"])
             else:
-                scatter = self.rng.standard_normal(self.n)
+                # Intrinsic scatter of the relation: a standard-normal latent variable, sampled by MCMC.
+                scatter, scatter_state = self._sample_standard_normal("planet_mass_scatter")
                 self._derive("planet_mass", ["planet_radius"],
                              lambda S: physics.mass_from_radius_ck17(S["planet_radius"], scatter),
                              "Chen & Kipping (2017) empirical mass-radius relation (Terran/Neptunian branches), "
                              "including its intrinsic scatter. An estimate, not a measurement.",
                              "log10 R = C + S log10 M  (S = 0.279 / 0.589)", assumptions=["ck17_mass_radius"],
                              provenance=MODEL_ESTIMATED, reliability_floor=LOW,
-                             extra_reason=self._no_measured_mass_reason())
+                             extra_reason=self._no_measured_mass_reason(),
+                             unconverged={"planet_mass_scatter"} if scatter_state != "converged" else ())
 
         # Semi-major axis: Kepler's third law (stellar mass) > transit geometry (a/R* x R*)
         measured_mass = self._ok("planet_mass") and self.params["planet_mass"].evidence in (MEASURED, "expert_override")
@@ -1060,8 +1206,8 @@ class _Engine:
     def _explain_mass_dependents(self):
         """States what each mass-dependent quantity rests on and where its
         uncertainty comes from: the share of var(ln q) contributed by the
-        mass and by the radius, from the same (correlated) Monte Carlo
-        samples the values were computed from."""
+        mass and by the radius, from the same (correlated) MCMC samples
+        the values were computed from."""
         mass = self.params.get("planet_mass")
         if not (self._ok("planet_mass") and self._ok("planet_radius")):
             return
@@ -1159,7 +1305,9 @@ class _Engine:
                       np.full(self.n, np.nan), {"stellar_density_transit"})
             return
         sig_up, sig_lo = math.log(hi / best), math.log(best / lo)
-        z = self.rng.standard_normal(self.n)
+        # Split-lognormal around the profile-likelihood interval, from a
+        # standard-normal latent variable sampled by MCMC.
+        z, z_state = self._sample_standard_normal("stellar_density_transit")
         samples = best * np.exp(np.where(z > 0, z * sig_up, z * sig_lo))
         rv, rl, ru, disp = format_measurement(best, best - lo, hi - best)
         rel = max(hi - best, best - lo) / best
@@ -1168,9 +1316,11 @@ class _Engine:
             f"The light curve alone constrains it only to {lo:.2g}-{hi:.2g} g/cm³ (68%): b and a/R* are degenerate "
             f"at this SNR/cadence. Relative uncertainty exceeds {self.cfg.low_confidence_relative_uncertainty:.0%}; "
             "higher-SNR or shorter-cadence photometry would tighten it.")
+        # The reported interval is the profile likelihood's; only dependents use the samples.
         self._put(Parameter(**common, value=rv, reliability=RELIABLE if reliable else LOW,
                             uncertainty=Uncertainty(rl, ru, "profile_likelihood", "68% (Delta chi^2 <= 1)"),
-                            reason=reason, display=disp), samples, set())
+                            reason=reason, display=disp), samples, set(),
+                  {"stellar_density_transit"} if z_state != "converged" else set())
 
     # -- validation helpers -------------------------------------------------
     def _sym(self, name):
@@ -1376,6 +1526,11 @@ def compute_report(inputs: dict, overrides: dict | None = None, config: dict | C
     samples = {n: (eng.samples.get(n) if eng._ok(n) else None) for n in eng.params}
     mass_prov = eng.params["planet_mass"].provenance if "planet_mass" in eng.params else None
     classifications = [c.to_dict() for c in classify(values, samples, mass_prov)]
+    for c in classifications:
+        blocks = sorted(set().union(*(eng.unconverged.get(d, set()) for d in c["depends_on"])))
+        if blocks and c.get("probabilities"):
+            c["caveats"].append(f"Category shares come from MCMC samples ({', '.join(blocks)}) that did not pass the "
+                                "convergence checks; treat them as approximate.")
 
     # Overrides bookkeeping
     overridden = set(ovs)
@@ -1384,7 +1539,7 @@ def compute_report(inputs: dict, overrides: dict | None = None, config: dict | C
                             if set(c["depends_on"]) & (overridden | set(recomputed)))
 
     # Missing-input explanations
-    texts = assumption_texts(cfg)
+    texts = assumption_texts(cfg, eng.ld)
     missing_inputs = []
     for name, p in eng.params.items():
         if p.status == STATUS_COMPUTED or p.missing_inputs:
@@ -1428,8 +1583,8 @@ def compute_report(inputs: dict, overrides: dict | None = None, config: dict | C
                                            "label": PARAM_META[n][0]} for n, (lo, hi) in OVERRIDABLE.items()},
         },
         "config": {"bond_albedo": cfg.bond_albedo, "heat_redistribution": cfg.heat_redistribution,
-                   "mc_samples": cfg.mc_samples, "random_seed": cfg.random_seed,
-                   "snr_detection_threshold": cfg.snr_detection_threshold},
+                   **cfg.sampler_dict(), "snr_detection_threshold": cfg.snr_detection_threshold},
+        "sampler": _sampler_report(eng),
         "provenance_categories": {
             "catalog": "Local NASA Exoplanet Archive KOI catalogue value.",
             "observed": "Measured directly from the light curve without a physical model.",
@@ -1442,6 +1597,31 @@ def compute_report(inputs: dict, overrides: dict | None = None, config: dict | C
         },
     }
     return report
+
+
+def _sampler_report(eng: _Engine) -> dict:
+    """How the uncertainty samples were produced: settings, per-block
+    targets and convergence diagnostics."""
+    blocks = [b.to_dict() for b in eng.sampler_blocks]
+    s = eng.mcmc
+    return {
+        "method": "mcmc",
+        "algorithm": ("Random-walk Metropolis, one block per independent input distribution (split normal for "
+                      "catalogue values and overrides; the fit covariance's multivariate normal restricted to the "
+                      "physical domain, jointly; standard normal for latent scatter). Over-dispersed starts, proposal "
+                      "scale adapted during burn-in only, burn-in discarded, then thinned."),
+        "settings": {"retained_samples": s.n_samples, "chains": s.n_chains, "burn_in": s.burn_in, "thin": s.thin,
+                     "iterations_per_chain": s.iterations_per_chain, "rhat_threshold": s.rhat_threshold,
+                     "min_ess": s.min_ess, "random_seed": eng.cfg.random_seed},
+        "convergence_checks": "Split R-hat (max over coordinates) and multi-chain effective sample size (min over "
+                              "coordinates) per block.",
+        "usage": "Every derived parameter's 68% interval (16th-84th percentile) and every classification's category "
+                 "shares are computed from the same retained samples, matched by index across blocks.",
+        "n_blocks": len(blocks),
+        "converged": all(b["converged"] for b in blocks),
+        "unconverged_blocks": [b["block"] for b in blocks if not b["converged"]],
+        "blocks": blocks,
+    }
 
 
 def _transitive_missing(params: dict[str, Parameter], name: str, seen=None) -> set[str]:

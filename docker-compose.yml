@@ -32,8 +32,57 @@ services:
       - ML_SERVICE_ANALYSIS_TIMEOUT=${ML_SERVICE_ANALYSIS_TIMEOUT:-60}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-http://localhost:5500}
+      # ---- User accounts ----
+      - APP_ENV=${APP_ENV:-production}
+      # Secure cookies by default. Chrome/Firefox accept them on
+      # http://localhost; set COOKIE_SECURE=false in .env only for local
+      # testing in browsers that don't (e.g. Safari).
+      - COOKIE_SECURE=${COOKIE_SECURE:-true}
+      - MONGODB_URI=mongodb://mongo:27017
+      - MONGODB_DB_NAME=${MONGO_APP_DB:-exodiscovery}
+      - MONGODB_AUTH_SOURCE=${MONGO_APP_DB:-exodiscovery}
+      - MONGODB_USERNAME=${MONGO_APP_USERNAME:-exodiscovery_app}
+      - MONGODB_PASSWORD=${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD in .env (see .env.example)}
+      # Ed25519 signing key (generate with `npm run generate:jwt-key` in
+      # Backend/). Unset = account features answer 503; the rest of the app
+      # is unaffected.
+      - JWT_PRIVATE_KEY=${JWT_PRIVATE_KEY:-}
+      - JWT_ISSUER=${JWT_ISSUER:-https://exodiscovery.online}
+      - JWT_AUDIENCE=${JWT_AUDIENCE:-exodiscovery-web}
+      - ACCESS_TOKEN_TTL_SECONDS=${ACCESS_TOKEN_TTL_SECONDS:-600}
+    networks:
+      - default
+      - db
     depends_on:
       - ml-service
+      - mongo
+
+  # User-account database. Deliberately has NO `ports:` -- it is reachable
+  # only by the backend over the internal `db` network, never from the host
+  # or the internet. Data lives in the named volume, so it survives container
+  # restarts/rebuilds.
+  mongo:
+    image: mongo:8.0.15
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:-root}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env (see .env.example)}
+      # Read by deploy/mongo-init/01-create-app-user.js on first start only.
+      - MONGO_APP_DB=${MONGO_APP_DB:-exodiscovery}
+      - MONGO_APP_USERNAME=${MONGO_APP_USERNAME:-exodiscovery_app}
+      - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD in .env (see .env.example)}
+    volumes:
+      - mongo-data:/data/db
+      - ./deploy/mongo-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
 
   frontend:
     restart: unless-stopped
@@ -63,3 +112,13 @@ services:
     security_opt:
       - no-new-privileges:true
     mem_limit: 128m
+
+networks:
+  default: {}
+  # Internal-only: no route to the outside world and nothing published on
+  # the host. Only the backend and mongo are attached.
+  db:
+    internal: true
+
+volumes:
+  mongo-data: {}

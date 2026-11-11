@@ -82,6 +82,26 @@ router.post("/predict", upload.single("file"), async (req, res, next) => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
 
     result.request_id = requestId;
+
+    // Saves the run and its uploaded CSV (GridFS) to the user's prediction
+    // history. Best-effort: recordRun never throws, and a run that could not
+    // be saved still returns its prediction.
+    const recordRun = req.app.locals.recordPredictionRun;
+    if (recordRun) {
+      const saved = await recordRun({
+        userId: req.auth && req.auth.user && req.auth.user._id,
+        requestId,
+        file: req.file,
+        result,
+      });
+      // Lets the client attach later manual parameters to this same run, and
+      // tells it whether this was a re-run of a prediction already in history.
+      if (saved) {
+        result.history_id = saved.id;
+        result.history_rerun = saved.rerun;
+      }
+    }
+
     setImmediate(() => logPredictionEvent(requestId, durationMs, 200));
     return res.status(200).json(result);
   } catch (err) {
@@ -104,6 +124,19 @@ router.post("/predict/manual", express.json(), async (req, res, next) => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
 
     result.request_id = requestId;
+
+    // Saves the exact submitted parameters to the user's history -- on the
+    // CSV run named by X-History-Id when it is theirs. Best-effort, like /predict.
+    const recordManualRun = req.app.locals.recordManualPredictionRun;
+    if (recordManualRun) {
+      await recordManualRun({
+        userId: req.auth && req.auth.user && req.auth.user._id,
+        historyId: req.get("x-history-id"),
+        requestId,
+        parameters: req.body,
+        result,
+      });
+    }
     setImmediate(() => logPredictionEvent(requestId, durationMs, 200));
     return res.status(200).json(result);
   } catch (err) {

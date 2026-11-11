@@ -87,14 +87,15 @@ Object ID ─ stellar_catalog_service.py (existing) ─► KOI row(s) ─► Tef
 inputs snapshot + expert overrides + assumptions ─► engine.py ─► report (JSON)
 ```
 
-The fit runs once, in the existing `asyncio.to_thread` upload path (≈0.2–2 s). Recomputing with overrides reuses the stored `inputs` snapshot and only re-runs the engine (≈10 ms), via `POST /characterization/recompute` (gateway: `POST /api/v1/characterization/recompute`), cached by a content hash of inputs + overrides + config.
+The fit runs once, in the existing `asyncio.to_thread` upload path (≈0.2–2 s). Recomputing with overrides reuses the stored `inputs` snapshot and only re-runs the engine (MCMC sampling of the input uncertainties, no light-curve refit), via `POST /characterization/recompute` (gateway: `POST /api/v1/characterization/recompute`), cached by a content hash of inputs + overrides + config.
 
 | Module | Role |
 |---|---|
 | `transit_model.py` | Quadratic-limb-darkened, circular-orbit transit model (numerical integration over the occulted annuli; verified against the exact uniform-disk solution to < 1e-4 of the depth), finite-exposure supersampling |
 | `transit_fit.py` | Local detrending, empirical noise, bounded least-squares fit, red-noise β, per-transit timing, linear ephemeris and O−C χ² test |
-| `physics.py` | Physical relations (vectorised for Monte Carlo) |
-| `uncertainty.py` | Split-normal / correlated multivariate sampling, analytic power-law propagation, uncertainty-based rounding |
+| `limb_darkening.py` | Host-star Kepler-band quadratic limb darkening, trilinearly interpolated from `data/limb_darkening_kepler_atlas9.csv` (built offline with ExoCTK, see below) |
+| `physics.py` | Physical relations (vectorised over MCMC samples) |
+| `uncertainty.py` | Random-walk Metropolis MCMC sampler with split-R̂ / ESS convergence checks, analytic power-law propagation, uncertainty-based rounding |
 | `classification.py` | Configurable, referenced classification rules |
 | `engine.py` | Dependency graph, provenance, reliability, overrides, consistency checks, report assembly |
 | `planet_characterization.py` | Public interface: `characterize_light_curve(...)`, `recompute_characterization(...)` |
@@ -125,6 +126,46 @@ Every parameter carries value, unit, provenance (`catalog`, `observed`, `fitted`
 
 Local `ml_service/data/koi_catalog.csv` only (no network calls). Identifiers: KIC (`KIC 10797460`), KOI (`K00752.01`, `KOI-752.01`), Kepler name (`Kepler-227 b`), and TCE (`010797460-01`, `KIC 10797460 TCE 1`). For a KIC with several KOIs, stellar values are shared and the reference KOI is the one whose period matches the light curve within 1%. The snapshot has no metallicity, stellar mass, luminosity, density or distance columns: mass, luminosity and density are derived (and flagged), metallicity and distance are `unavailable` and can be supplied by override. Catalogue planet values (`koi_period`, `koi_depth`, `koi_prad`, `koi_teq`, …) are never used as results, only in the catalogue-comparison table. The one exception: if the BLS-seeded fit is not significant or disagrees with the catalogue period, a second fit is seeded from the catalogue ephemeris and kept only if it is significant and better. The seed used is recorded, and the fitted values are still measured from the light curve.
 
+### Limb darkening (ExoCTK, offline)
+
+The transit fit uses quadratic limb-darkening coefficients for the host star, interpolated (trilinear, never extrapolated) at the catalogue Teff and log g with solar [Fe/H] from `ml_service/data/limb_darkening_kepler_atlas9.csv`. That table is generated **offline** with [ExoCTK](https://github.com/ExoCTK/exoctk) — the Kepler bandpass (`Kepler.K`, svo_filters) applied to the ATLAS9 specific-intensity grid at all 330 nodes (Teff 3500–8750 K / 250 K, log g 3.0–5.0 / 0.5, [Fe/H] −0.5, 0, +0.5). ExoCTK is not a runtime dependency. The fit records the coefficients and their source under `transit_fit.limb_darkening`; unknown or out-of-grid stars keep u1 = 0.40, u2 = 0.26 with the reason stated.
+
+To regenerate (separate virtualenv; only the ~70 MB ATLAS9 grid is needed, not ExoCTK's full data release):
+
+```bash
+python -m venv /tmp/exoctk-venv && /tmp/exoctk-venv/bin/pip install exoctk
+mkdir -p /tmp/exoctk_data/modelgrid && cd /tmp/exoctk_data
+curl -LO https://data.science.stsci.edu/redirect/JWST/ExoCTK/exoctk_data_v2026p7p4/compressed/modelgrid_ATLAS9.tar.gz
+tar -xzf modelgrid_ATLAS9.tar.gz && mv modelgrid.ATLAS9 modelgrid/ATLAS9
+rm -f modelgrid/ATLAS9/model_grid.p modelgrid/ATLAS9/model_grid_flux.hdf5   # let ExoCTK re-index locally
+cd /path/to/exoplanet-discovery/ml_service
+EXOCTK_DATA=/tmp/exoctk_data /tmp/exoctk-venv/bin/python scripts/build_limb_darkening_table.py
+```
+
+### Uncertainty sampling (MCMC)
+
+Every uncertain input is sampled by Markov chain Monte Carlo (random-walk Metropolis, `uncertainty.py`), one block per independent input distribution:
+
+| Block | Target distribution |
+|---|---|
+| Catalogue values, expert overrides | Split normal: mode at the value, widths `err_plus` above / `err_minus` below |
+| Transit-fit parameters (jointly) | Multivariate normal with the fit covariance (correlations preserved), restricted to k > 0, a/R* > 1, 0 ≤ b² < (1+k)² |
+| Chen & Kipping scatter, transit-only stellar density | Standard-normal latent variable (transformed by the relation / split-lognormal) |
+
+Chains start over-dispersed around the central value; the proposal (shaped like the target) is tuned toward 0.44 / 0.234 acceptance during burn-in only, burn-in is discarded, the kernel is then fixed and draws are thinned. Each block is checked with split-R̂ and multi-chain ESS; the retained draws (matched by index across blocks) give every derived interval (16th–84th percentile) and every classification's category shares. Inputs without an uncertainty are held fixed and flagged, as before. Blocks that fail or do not converge are listed in the report's `sampler` section and in `warnings`; intervals computed from them carry `uncertainty.converged = false` and are downgraded to low confidence, and dependent classifications get a caveat.
+
+Configuration (`config` on `POST /characterization/recompute`; reported back under `config` and `sampler.settings`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mcmc_samples` | 4000 | Retained draws, pooled over chains (`mc_samples` is accepted as a deprecated alias) |
+| `mcmc_chains` | 16 | Independent chains per block |
+| `mcmc_burn_in` | 400 | Discarded iterations per chain (proposal adaptation happens only here) |
+| `mcmc_thin` | 2 | Keep every n-th post-burn-in draw |
+| `mcmc_rhat_threshold` | 1.05 | Maximum split-R̂ for convergence |
+| `mcmc_min_ess` | 200 | Minimum effective sample size for convergence |
+| `random_seed` | 20240601 | Seed; identical inputs + config give identical reports |
+
 ### Expert overrides
 
 Overridable inputs (with physical range validation): orbital period, epoch, depth, duration, impact parameter, radius ratio, a/R*, stellar radius / Teff / log g / mass / metallicity / luminosity, distance, planet radius / mass, eccentricity, argument of periastron, semi-major axis, Teq, insolation. Plus Bond albedo and heat redistribution as assumptions. Overrides cut a node's upstream edges and never propagate backwards; the graph is checked to be acyclic at import. Edits made in the existing 17-parameter Expert Override form are forwarded automatically (only fields that actually changed). The report lists `recomputed_outputs`; "Restore automatic values" drops all overrides.
@@ -138,8 +179,8 @@ Overridable inputs (with physical range validation): orbital period, epoch, dept
 ### Limitations
 
 - Circular orbit assumed unless e is supplied; photometry cannot constrain e.
-- Limb darkening fixed (u1 = 0.40, u2 = 0.26), not Teff-dependent or fitted.
-- Uncertainties from the linearised fit covariance (truncated to physical bounds), not MCMC; b–a/R* degeneracies are flagged rather than fully explored.
+- Limb darkening is the host star's Kepler-band quadratic law from an ExoCTK/ATLAS9 table, held fixed (not fitted); [Fe/H] is assumed solar (the catalogue has no metallicity), stars outside 3500–8750 K / log g 3.0–5.0 fall back to u1 = 0.40, u2 = 0.26, and Teff / log g overrides do not change it (no refit).
+- Fit uncertainties come from the linearised fit covariance (a Gaussian truncated to physical bounds, sampled by MCMC), not from an MCMC posterior re-fitted to the light curve; b–a/R* degeneracies are flagged rather than fully explored.
 - No dilution / third-light correction; time column assumed to be days.
 - The existing BLS search runs on un-detrended flux and can lock onto instrumental features (e.g. Kepler quarter jumps); the engine flags insignificant fits and can recover via the catalogue ephemeris.
 - `app/feature_engine.py` computes the ML feature `koi_teq` with Bond albedo 0, while NASA's `koi_teq` (the model's training data) uses 0.3 — ~9% hotter than the training convention. Left unchanged here because it alters ML predictions.

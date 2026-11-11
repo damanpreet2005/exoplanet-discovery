@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import Logo from "./Logo";
 import Icon from "./Icon";
+import Avatar from "./Avatar";
+import { useAuth } from "../context/AuthContext";
 
 // A floating, collapsible navigation dock (not an edge-attached sidebar --
 // see .dock in index.css). Collapsed to icons-only at rest; hovering (or,
@@ -34,6 +36,16 @@ const WORKFLOW_ITEMS = [
 
 const SYSTEM_ITEMS = [{ to: "/status", label: "System Status", icon: "monitor_heart" }];
 
+// Account entries depend on auth state: signed-out visitors get a single
+// Login / Sign Up entry; signed-in users get the User Dashboard plus their
+// profile chip. Nothing is shown while a session is still being restored, so
+// the dock doesn't flash the wrong state on reload.
+const LOGGED_OUT_ITEMS = [{ to: "/login", label: "Login / Sign Up", icon: "login" }];
+const LOGGED_IN_ITEMS = [
+  { to: "/history", label: "Prediction History", icon: "history" },
+  { to: "/account", label: "User Dashboard", icon: "dashboard" },
+];
+
 function DockLink({ to, label, icon, end }) {
   return (
     <li>
@@ -51,7 +63,21 @@ function DockLink({ to, label, icon, end }) {
   );
 }
 
+function ProfileEntry({ user }) {
+  const label = `Account: ${user.name}`;
+  return (
+    <Link to="/account" className="dock-link dock-profile" title={label} aria-label={label}>
+      <Avatar user={user} size={28} className="dock-avatar" />
+      <span className="dock-label dock-profile-text">
+        <span className="dock-profile-name">{user.name}</span>
+        <span className="dock-profile-handle">@{user.username}</span>
+      </span>
+    </Link>
+  );
+}
+
 export default function Sidebar() {
+  const { status, user } = useAuth();
   const [open, setOpen] = useState(false);
   const dockRef = useRef(null);
   const location = useLocation();
@@ -109,7 +135,18 @@ export default function Sidebar() {
             {SYSTEM_ITEMS.map((item) => (
               <DockLink key={item.to} {...item} />
             ))}
+            {status === "anonymous" && LOGGED_OUT_ITEMS.map((item) => <DockLink key={item.to} {...item} />)}
+            {status === "authenticated" && LOGGED_IN_ITEMS.map((item) => <DockLink key={item.to} {...item} />)}
           </ul>
+
+          {status === "authenticated" && user && (
+            <>
+              <div className="dock-divider" role="separator" aria-hidden="true" />
+              <div className="dock-list">
+                <ProfileEntry user={user} />
+              </div>
+            </>
+          )}
         </nav>
       </div>
     </aside>

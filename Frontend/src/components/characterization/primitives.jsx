@@ -157,9 +157,13 @@ export function ParamList({ params, lookup }) {
   );
 }
 
+const UNCERTAINTY_METHOD_LABELS = { mcmc: "MCMC" };
+
 export function uncertaintyText(u) {
   if (!u) return "None available";
-  const parts = [`${u.method.replace(/_/g, " ")}, ${u.interval}`];
+  const parts = [`${UNCERTAINTY_METHOD_LABELS[u.method] || u.method.replace(/_/g, " ")}, ${u.interval}`];
+  // Reports from engines before 1.1.0 have no `converged` field.
+  if (u.converged === false) parts.push("MCMC chains did not pass convergence checks: interval unreliable");
   if (!u.complete && u.excluded_inputs?.length) parts.push(`excludes ${u.excluded_inputs.join(", ")} (no uncertainty)`);
   if (u.systematic?.length) parts.push(`not included: ${u.systematic.join(" ")}`);
   return parts.join("; ");
@@ -220,7 +224,7 @@ export function ParamDetailsTable({ params }) {
   );
 }
 
-/** One classification with the share of Monte Carlo samples in each category. */
+/** One classification with the share of retained MCMC samples in each category. */
 export function ClassificationCard({ c }) {
   const computed = c.status === "computed";
   const probs = Object.entries(c.probabilities || {}).sort((a, b) => b[1] - a[1]);
@@ -229,7 +233,7 @@ export function ClassificationCard({ c }) {
       <div className="class-card-label">{c.label}</div>
       <div className="class-card-value">{c.category || "Unavailable"}</div>
       {computed && probs.length > 0 && (
-        <div className="class-probs" aria-label="Share of Monte Carlo samples per category">
+        <div className="class-probs" aria-label="Share of MCMC samples per category">
           {probs.map(([name, v]) => (
             <div className="class-prob" key={name}>
               <span className="class-prob-name">{name}</span>

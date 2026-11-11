@@ -5,7 +5,7 @@ These are *descriptive labels derived from computed quantities*, with the
 rule and its literature basis stated next to every result. They never
 assert atmospheric composition, surface conditions, habitability, or that
 the candidate is a confirmed planet. Each category carries the fraction of
-Monte Carlo samples that fall in it, so a radius straddling a boundary is
+retained MCMC samples (see uncertainty.py) that fall in it, so a radius straddling a boundary is
 reported as such rather than forced into one bin.
 
 All thresholds live in CLASSIFICATION_RULES and can be replaced via
@@ -101,8 +101,8 @@ def _binned(name: str, label: str, rule: dict, value, samples, depends_on: list[
 
 
 def classify(values: dict, samples: dict, mass_provenance: str | None, rules: dict | None = None) -> list[Classification]:
-    """`values`/`samples` are keyed by parameter name (central value and MC
-    samples; None when unavailable)."""
+    """`values`/`samples` are keyed by parameter name (central value and
+    retained MCMC samples; None when unavailable)."""
     rules = rules or CLASSIFICATION_RULES
     rp, rp_s = values.get("planet_radius"), samples.get("planet_radius")
     s, s_s = values.get("insolation"), samples.get("insolation")

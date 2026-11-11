@@ -215,7 +215,7 @@ export default function DiscoveryReportPage() {
                     <span className="report-class-label">{c.label}</span>
                     <strong>{c.status === "computed" ? c.category : "Unavailable"}</strong>
                     {c.status === "computed" && c.probability !== null && c.probability !== undefined && (
-                      <span className="char-alt">{Math.round(c.probability * 100)}% of Monte Carlo samples · based on {c.depends_on?.join(", ")}</span>
+                      <span className="char-alt">{Math.round(c.probability * 100)}% of MCMC samples · based on {c.depends_on?.join(", ")}</span>
                     )}
                   </li>
                 ))}

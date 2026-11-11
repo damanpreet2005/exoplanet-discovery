@@ -1,14 +1,14 @@
 jest.mock("../src/services/mlClient");
 const mlClient = require("../src/services/mlClient");
-const request = require("supertest");
-const { createApp } = require("../src/app");
+const { createAuthedApp, authedAgent } = require("./helpers/authedApp");
 const {
   MLServiceUnavailableError,
   MLServiceTimeoutError,
   UpstreamValidationError,
 } = require("../src/errors");
 
-const app = createApp();
+const app = createAuthedApp();
+const api = authedAgent(app);
 
 const FAKE_ML_RESPONSE = {
   filename: "lightcurve.csv",
@@ -35,7 +35,7 @@ afterEach(() => jest.clearAllMocks());
 test("a tabular Kepler-catalog CSV (not a light curve) does not require an Object ID", async () => {
   mlClient.forwardCsvPrediction.mockResolvedValue({ dataset_type: "tabular_kepler", results: [] });
 
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .attach("file", TABULAR_KEPLER_CSV, { filename: "tabular.csv", contentType: "text/csv" });
 
@@ -47,7 +47,7 @@ test("a tabular Kepler-catalog CSV (not a light curve) does not require an Objec
 test("valid light curve CSV with a valid Object ID is forwarded to the ML service and result returned", async () => {
   mlClient.forwardCsvPrediction.mockResolvedValue({ ...FAKE_ML_RESPONSE });
 
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -67,7 +67,7 @@ test("valid light curve CSV with a valid Object ID is forwarded to the ML servic
 test("Object ID is trimmed before being forwarded", async () => {
   mlClient.forwardCsvPrediction.mockResolvedValue({ ...FAKE_ML_RESPONSE });
 
-  await request(app)
+  await api
     .post("/api/v1/predict")
     .field("object_id", "  KIC 11904151  ")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -78,7 +78,7 @@ test("Object ID is trimmed before being forwarded", async () => {
 });
 
 test("missing Object ID is rejected with 422 without calling the ML service", async () => {
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
 
@@ -89,7 +89,7 @@ test("missing Object ID is rejected with 422 without calling the ML service", as
 });
 
 test("blank Object ID is rejected with 422 without calling the ML service", async () => {
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .field("object_id", "   ")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -99,7 +99,7 @@ test("blank Object ID is rejected with 422 without calling the ML service", asyn
 });
 
 test("overly long Object ID is rejected with 422 without calling the ML service", async () => {
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .field("object_id", "x".repeat(65))
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -111,7 +111,7 @@ test("overly long Object ID is rejected with 422 without calling the ML service"
 test("request ID is generated and passed through to the ML client", async () => {
   mlClient.forwardCsvPrediction.mockResolvedValue({ ...FAKE_ML_RESPONSE });
 
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .set("X-Request-Id", "trace-99")
     .field("object_id", "KIC 11904151")
@@ -125,14 +125,14 @@ test("request ID is generated and passed through to the ML client", async () => 
 });
 
 test("missing file returns 422 without calling the ML service", async () => {
-  const res = await request(app).post("/api/v1/predict");
+  const res = await api.post("/api/v1/predict");
   expect(res.status).toBe(422);
   expect(res.body.error.code).toBe("VALIDATION_ERROR");
   expect(mlClient.forwardCsvPrediction).not.toHaveBeenCalled();
 });
 
 test("empty file returns 422 without calling the ML service", async () => {
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .attach("file", Buffer.from(""), { filename: "empty.csv", contentType: "text/csv" });
   expect(res.status).toBe(422);
@@ -141,7 +141,7 @@ test("empty file returns 422 without calling the ML service", async () => {
 
 test("ML service unavailable returns 503", async () => {
   mlClient.forwardCsvPrediction.mockRejectedValue(new MLServiceUnavailableError());
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -151,7 +151,7 @@ test("ML service unavailable returns 503", async () => {
 
 test("ML service timeout returns 504", async () => {
   mlClient.forwardCsvPrediction.mockRejectedValue(new MLServiceTimeoutError());
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -163,7 +163,7 @@ test("ML service validation rejection is passed through as 422", async () => {
   mlClient.forwardCsvPrediction.mockRejectedValue(
     new UpstreamValidationError(422, { error: { code: "CSV_VALIDATION_ERROR", message: "bad csv" } })
   );
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -176,7 +176,7 @@ test("unexpected error returns structured 500 without leaking internals", async 
   mlClient.forwardCsvPrediction.mockRejectedValue(
     new Error("/secret/internal/path stack trace detail")
   );
-  const res = await request(app)
+  const res = await api
     .post("/api/v1/predict")
     .field("object_id", "KIC 11904151")
     .attach("file", LIGHT_CURVE_CSV, { filename: "lightcurve.csv", contentType: "text/csv" });
@@ -198,7 +198,7 @@ describe("POST /api/v1/predict/manual", () => {
   test("valid named parameters are forwarded to the ML service", async () => {
     mlClient.forwardNamedPrediction.mockResolvedValue({ ...FAKE_MANUAL_RESPONSE });
 
-    const res = await request(app)
+    const res = await api
       .post("/api/v1/predict/manual")
       .send({ orbital_period: 384.84, transit_duration: 4.2 });
 
@@ -212,7 +212,7 @@ describe("POST /api/v1/predict/manual", () => {
   });
 
   test("empty body returns 422 without calling the ML service", async () => {
-    const res = await request(app).post("/api/v1/predict/manual").send({});
+    const res = await api.post("/api/v1/predict/manual").send({});
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
     expect(mlClient.forwardNamedPrediction).not.toHaveBeenCalled();
@@ -222,14 +222,14 @@ describe("POST /api/v1/predict/manual", () => {
     mlClient.forwardNamedPrediction.mockRejectedValue(
       new UpstreamValidationError(422, { error: { code: "MISSING_FEATURE", message: "Missing required feature: koi_period." } })
     );
-    const res = await request(app).post("/api/v1/predict/manual").send({ transit_duration: 4.2 });
+    const res = await api.post("/api/v1/predict/manual").send({ transit_duration: 4.2 });
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("MISSING_FEATURE");
   });
 
   test("ML service unavailable returns 503", async () => {
     mlClient.forwardNamedPrediction.mockRejectedValue(new MLServiceUnavailableError());
-    const res = await request(app).post("/api/v1/predict/manual").send({ orbital_period: 384.84 });
+    const res = await api.post("/api/v1/predict/manual").send({ orbital_period: 384.84 });
     expect(res.status).toBe(503);
     expect(res.body.error.code).toBe("ML_SERVICE_UNAVAILABLE");
   });
@@ -240,14 +240,14 @@ describe("GET /api/v1/feature-schema", () => {
     const fakeSchema = { features: [{ canonical: "koi_period", display: "Orbital Period" }], order_configured: false };
     mlClient.fetchFeatureSchema.mockResolvedValue(fakeSchema);
 
-    const res = await request(app).get("/api/v1/feature-schema");
+    const res = await api.get("/api/v1/feature-schema");
     expect(res.status).toBe(200);
     expect(res.body).toEqual(fakeSchema);
   });
 
   test("ML service unavailable returns 503", async () => {
     mlClient.fetchFeatureSchema.mockRejectedValue(new MLServiceUnavailableError());
-    const res = await request(app).get("/api/v1/feature-schema");
+    const res = await api.get("/api/v1/feature-schema");
     expect(res.status).toBe(503);
   });
 });
