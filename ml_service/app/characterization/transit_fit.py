@@ -27,10 +27,13 @@ PIPELINE
  7. Linear ephemeris t_n = T0 + n P (weighted least squares) through the
     individual times; O-C residuals and a chi^2 test for timing variations.
 
-Limb darkening is *assumed*, not fitted: quadratic u1 = 0.40, u2 = 0.26, a
-representative Kepler-band value for a Sun-like dwarf. Fitting LD
+Limb darkening is held fixed, not fitted: quadratic coefficients for the
+host star from the ExoCTK/ATLAS9 Kepler-band table (limb_darkening.py,
+chosen by planet_characterization.build_inputs from the catalogue Teff and
+log g), or u1 = 0.40, u2 = 0.26 -- representative Kepler-band values for a
+Sun-like dwarf -- when the star is unknown or outside the table. Fitting LD
 coefficients from a single-band light curve is degenerate with k and b at
-typical Kepler SNR. The engine records this assumption; it mainly affects k
+typical Kepler SNR. The engine records which was used; it mainly affects k
 at the few-percent level.
 
 TIME UNITS: the uploaded `time` column is treated as days (the Kepler/TESS
@@ -72,6 +75,12 @@ FIT_NO_TRANSIT = "no_transit"
 class FitConfig:
     u1: float = 0.40
     u2: float = 0.26
+    # How u1/u2 were chosen, recorded on the fit result. build_inputs replaces
+    # the defaults with the host star's tabulated values unless
+    # stellar_limb_darkening is False.
+    ld_provenance: str = "assumed"
+    ld_note: str = "Representative Kepler-band coefficients for a Sun-like dwarf; not fitted."
+    stellar_limb_darkening: bool = True
     window_half_width_durations: float = 1.5
     oot_inner_durations: float = 0.75
     max_points: int = 20000
@@ -257,8 +266,7 @@ def fit_transit(time: np.ndarray, flux: np.ndarray, bls_period: float, bls_epoch
     cfg = cfg or FitConfig()
     time = np.asarray(time, dtype=float)
     flux = np.asarray(flux, dtype=float) / np.median(flux)
-    ld = {"u1": cfg.u1, "u2": cfg.u2, "law": "quadratic", "provenance": "assumed",
-          "note": "Representative Kepler-band coefficients for a Sun-like dwarf; not fitted."}
+    ld = {"u1": cfg.u1, "u2": cfg.u2, "law": "quadratic", "provenance": cfg.ld_provenance, "note": cfg.ld_note}
     bls_info = {"period_days": bls_period, "epoch": bls_epoch, "duration_hours": bls_duration_days * 24.0,
                 "depth_ppm": bls_depth * 1e6, "snr": bls_snr}
 

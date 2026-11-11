@@ -3,7 +3,10 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import Starfield from "./components/Starfield";
 import WelcomeOverlay from "./components/WelcomeOverlay";
+import RequireAuth from "./components/RequireAuth";
+import AnalysisSessionGuard from "./components/AnalysisSessionGuard";
 import { AnalysisProvider } from "./context/AnalysisContext";
+import { AuthProvider } from "./context/AuthContext";
 import UploadPage from "./pages/UploadPage";
 import ManualParamsPage from "./pages/ManualParamsPage";
 import ResultsPage from "./pages/ResultsPage";
@@ -11,6 +14,9 @@ import PhysicsPage from "./pages/PhysicsPage";
 import CharacterisationPage from "./pages/CharacterisationPage";
 import DiscoveryReportPage from "./pages/DiscoveryReportPage";
 import StatusPage from "./pages/StatusPage";
+import AuthPage from "./pages/AuthPage";
+import AccountPage from "./pages/AccountPage";
+import HistoryPage from "./pages/HistoryPage";
 
 function prefersReducedMotion() {
   return typeof window !== "undefined" && window.matchMedia
@@ -33,25 +39,42 @@ export default function App() {
   );
 
   return (
-    <AnalysisProvider>
-      <BrowserRouter>
-        <div className="app-shell">
-          <Starfield />
-          <Sidebar />
-          <main className="app-main">
-            <Routes>
-              <Route path="/" element={<UploadPage />} />
-              <Route path="/manual-parameters" element={<ManualParamsPage />} />
-              <Route path="/results" element={<ResultsPage />} />
-              <Route path="/physics-validation" element={<PhysicsPage />} />
-              <Route path="/characterisation" element={<CharacterisationPage />} />
-              <Route path="/report" element={<DiscoveryReportPage />} />
-              <Route path="/status" element={<StatusPage />} />
-            </Routes>
-          </main>
-          {showWelcome && <WelcomeOverlay onDone={() => setShowWelcome(false)} />}
-        </div>
-      </BrowserRouter>
-    </AnalysisProvider>
+    <AuthProvider>
+      <AnalysisProvider>
+        <AnalysisSessionGuard />
+        <BrowserRouter>
+          <div className="app-shell">
+            <Starfield />
+            <Sidebar />
+            <main className="app-main">
+              <Routes>
+                {/* The analysis workflow requires a signed-in user (the gateway
+                    enforces the same rule on its analysis endpoints). */}
+                <Route path="/" element={<RequireAuth><UploadPage /></RequireAuth>} />
+                <Route path="/manual-parameters" element={<RequireAuth><ManualParamsPage /></RequireAuth>} />
+                <Route path="/results" element={<RequireAuth><ResultsPage /></RequireAuth>} />
+                <Route path="/physics-validation" element={<RequireAuth><PhysicsPage /></RequireAuth>} />
+                <Route path="/characterisation" element={<RequireAuth><CharacterisationPage /></RequireAuth>} />
+                <Route path="/report" element={<RequireAuth><DiscoveryReportPage /></RequireAuth>} />
+                <Route path="/history" element={<RequireAuth><HistoryPage /></RequireAuth>} />
+                {/* Public: system status and the account pages. */}
+                <Route path="/status" element={<StatusPage />} />
+                <Route path="/login" element={<AuthPage mode="login" />} />
+                <Route path="/signup" element={<AuthPage mode="signup" />} />
+                <Route
+                  path="/account"
+                  element={
+                    <RequireAuth>
+                      <AccountPage />
+                    </RequireAuth>
+                  }
+                />
+              </Routes>
+            </main>
+            {showWelcome && <WelcomeOverlay onDone={() => setShowWelcome(false)} />}
+          </div>
+        </BrowserRouter>
+      </AnalysisProvider>
+    </AuthProvider>
   );
 }

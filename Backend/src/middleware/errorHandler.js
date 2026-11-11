@@ -15,7 +15,19 @@ function errorHandler(err, req, res, next) {
     } else {
       logger.warn(err.message, { request_id: requestId, endpoint: req.path });
     }
-    return res.status(err.statusCode).json(structuredError(err.code, err.message, requestId));
+    if (err.statusCode === 401) res.setHeader("WWW-Authenticate", 'Bearer realm="exodiscovery"');
+    return res.status(err.statusCode).json(structuredError(err.code, err.message, requestId, err.fields));
+  }
+
+  // body-parser: malformed JSON. Its message can quote request content, so a
+  // fixed message is returned and logged instead.
+  if (err && err.type === "entity.parse.failed") {
+    logger.warn("malformed_json_body", { request_id: requestId, endpoint: req.path });
+    return res.status(400).json(structuredError("MALFORMED_JSON", "The request body is not valid JSON.", requestId));
+  }
+  if (err && err.type === "entity.too.large") {
+    logger.warn("request_body_too_large", { request_id: requestId, endpoint: req.path });
+    return res.status(413).json(structuredError("PAYLOAD_TOO_LARGE", "The request body is too large.", requestId));
   }
 
   // Multer file-size errors surface as a plain Error with `code === "LIMIT_FILE_SIZE"`.

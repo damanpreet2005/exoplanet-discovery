@@ -47,8 +47,58 @@ class UpstreamValidationError extends HttpError {
   }
 }
 
-function structuredError(code, message, requestId) {
+/**
+ * Field-level validation failure for account forms. `fields` maps a field
+ * name to a user-facing message; it never echoes the submitted value back.
+ */
+class FieldValidationError extends HttpError {
+  constructor(fields, message = "Some fields need attention.") {
+    super(422, "VALIDATION_ERROR", message);
+    this.fields = fields;
+  }
+}
+
+/** 401 -- deliberately generic so it never reveals which check failed. */
+class AuthenticationError extends HttpError {
+  constructor(message = "Authentication required.", code = "UNAUTHENTICATED") {
+    super(401, code, message);
+  }
+}
+
+class ForbiddenError extends HttpError {
+  constructor(message = "This request was rejected.", code = "FORBIDDEN") {
+    super(403, code, message);
+  }
+}
+
+class ConflictError extends HttpError {
+  constructor(code, message, fields) {
+    super(409, code, message);
+    this.fields = fields;
+  }
+}
+
+class AuthUnavailableError extends HttpError {
+  constructor(message = "Account services are temporarily unavailable.") {
+    super(503, "AUTH_UNAVAILABLE", message);
+  }
+}
+
+class NotFoundError extends HttpError {
+  constructor(message = "The requested resource does not exist.", code = "NOT_FOUND") {
+    super(404, code, message);
+  }
+}
+
+class HistoryUnavailableError extends HttpError {
+  constructor(message = "Prediction history is temporarily unavailable.") {
+    super(503, "HISTORY_UNAVAILABLE", message);
+  }
+}
+
+function structuredError(code, message, requestId, fields) {
   const body = { error: { code, message } };
+  if (fields) body.error.fields = fields;
   if (requestId) body.error.request_id = requestId;
   return body;
 }
@@ -60,5 +110,12 @@ module.exports = {
   MLServiceUnavailableError,
   MLServiceTimeoutError,
   UpstreamValidationError,
+  FieldValidationError,
+  AuthenticationError,
+  ForbiddenError,
+  ConflictError,
+  AuthUnavailableError,
+  NotFoundError,
+  HistoryUnavailableError,
   structuredError,
 };

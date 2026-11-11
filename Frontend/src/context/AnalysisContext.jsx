@@ -125,6 +125,9 @@ export function AnalysisProvider({ children }) {
   const [result, setResult] = useState(persisted.lightCurveResult || null);
   const [error, setError] = useState(null);
   const [filename, setFilename] = useState(persisted.lightCurveResult?.filename || null);
+  // Named parameter values restored from a saved history run (Re-run), used
+  // to pre-fill the parameter form for this analysis. Null for a new upload.
+  const [parameterPreset, setParameterPreset] = useState(persisted.parameterPreset || null);
 
   // ---- Page 2 -> Page 3: combined prediction (CSV analysis + 17 params) ----
   const [manualParameters, setManualParameters] = useState(persisted.manualParameters || null);
@@ -198,11 +201,12 @@ export function AnalysisProvider({ children }) {
     });
   }, [resetCharacterization]);
 
-  const analyze = useCallback(async (file, objectId) => {
+  const analyze = useCallback(async (file, objectId, { parameterPreset: preset = null } = {}) => {
     setStatus(STATUS.UPLOADING);
     setProgress(0);
     setError(null);
     setFilename(file.name);
+    setParameterPreset(preset);
 
     // A new light curve starts a new prediction session -- any previous
     // combined result was computed against a *different* CSV and must not
@@ -218,6 +222,7 @@ export function AnalysisProvider({ children }) {
     setPhysicsCandidateKey(null);
     resetCharacterization();
     clearPersistedSession();
+    if (preset) persistSession({ parameterPreset: preset });
 
     try {
       const body = await uploadCsvForAnalysis(file, {
@@ -240,7 +245,7 @@ export function AnalysisProvider({ children }) {
     setFinalStatus(FINAL_STATUS.SUBMITTING);
     setFinalError(null);
     try {
-      const body = await submitManualParameters(values);
+      const body = await submitManualParameters(values, result?.history_id);
       setManualParameters(values);
       setFinalResult(body);
       setFinalStatus(FINAL_STATUS.SUCCESS);
@@ -317,6 +322,7 @@ export function AnalysisProvider({ children }) {
     setResult(null);
     setError(null);
     setFilename(null);
+    setParameterPreset(null);
     setManualParameters(null);
     setFinalStatus(FINAL_STATUS.IDLE);
     setFinalResult(null);
@@ -339,7 +345,7 @@ export function AnalysisProvider({ children }) {
   return (
     <AnalysisContext.Provider
       value={{
-        status, progress, result, error, filename, analyze, reset,
+        status, progress, result, error, filename, analyze, reset, parameterPreset,
         manualParameters, finalStatus, finalResult, finalError, submitCombinedPrediction,
         acceptExtractedPrediction,
         physicsStatus, physicsResult, physicsError, startPhysicsValidation,

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "engine_version": "1.0.0",
+  "engine_version": "1.1.0",
   "generated_at": "2026-10-22T00:00:00+00:00",
   "candidate": {
     "object_id": "K00752.01",
@@ -272,7 +272,7 @@
         "lower": 0.0014,
         "upper": 0.0015,
         "method": "fit_covariance",
-        "interval": "68% (16th-84th percentile of covariance samples within physical bounds)",
+        "interval": "68% (16th-84th percentile of MCMC samples of the fit covariance within physical bounds)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -312,7 +312,7 @@
         "lower": 1.01,
         "upper": 0.79,
         "method": "fit_covariance",
-        "interval": "68% (16th-84th percentile of covariance samples within physical bounds)",
+        "interval": "68% (16th-84th percentile of MCMC samples of the fit covariance within physical bounds)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -351,8 +351,8 @@
       "uncertainty": {
         "lower": 0.15,
         "upper": 0.13,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -392,7 +392,7 @@
         "lower": 0.00047,
         "upper": 0.00045,
         "method": "fit_covariance",
-        "interval": "68% (16th-84th percentile of covariance samples within physical bounds)",
+        "interval": "68% (16th-84th percentile of MCMC samples of the fit covariance within physical bounds)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -426,7 +426,7 @@
         "lower": 0.00043,
         "upper": 0.00045,
         "method": "fit_covariance",
-        "interval": "68% (16th-84th percentile of covariance samples within physical bounds)",
+        "interval": "68% (16th-84th percentile of MCMC samples of the fit covariance within physical bounds)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -618,13 +618,13 @@
       "uncertainty": {
         "lower": 0.29,
         "upper": 0.33,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
       },
-      "method": "Mean density from stellar mass and radius (Monte Carlo: mass and radius are correlated when the mass is derived from log g).",
+      "method": "Mean density from stellar mass and radius (MCMC samples: mass and radius are correlated when the mass is derived from log g).",
       "equation": "rho* = M* / (4/3 pi R*^3)",
       "assumptions": [
         "catalog_stellar_parameters"
@@ -655,8 +655,8 @@
       "uncertainty": {
         "lower": 19.0,
         "upper": 20.0,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -707,8 +707,8 @@
       "uncertainty": {
         "lower": 0.082,
         "upper": 0.082,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -758,8 +758,8 @@
       "uncertainty": {
         "lower": 0.086,
         "upper": 0.085,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -803,8 +803,8 @@
       "uncertainty": {
         "lower": 0.44,
         "upper": 0.72,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -846,8 +846,8 @@
       "uncertainty": {
         "lower": 0.19,
         "upper": 0.22,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -898,8 +898,8 @@
       "uncertainty": {
         "lower": 2.4,
         "upper": 4.7,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -942,8 +942,8 @@
       "uncertainty": {
         "lower": 0.0072,
         "upper": 0.0074,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -981,8 +981,8 @@
       "uncertainty": {
         "lower": 0.48,
         "upper": 0.47,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1052,8 +1052,8 @@
       "uncertainty": {
         "lower": 8.2,
         "upper": 8.5,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1091,8 +1091,8 @@
       "uncertainty": {
         "lower": 13.0,
         "upper": 17.0,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1133,8 +1133,8 @@
       "uncertainty": {
         "lower": 28.0,
         "upper": 32.0,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": [
@@ -1185,8 +1185,8 @@
       "uncertainty": {
         "lower": 0.068,
         "upper": 0.08,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1224,8 +1224,8 @@
       "uncertainty": {
         "lower": 0.12,
         "upper": 0.14,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1263,8 +1263,8 @@
       "uncertainty": {
         "lower": 0.054,
         "upper": 0.063,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1302,8 +1302,8 @@
       "uncertainty": {
         "lower": 0.13,
         "upper": 0.15,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1341,8 +1341,8 @@
       "uncertainty": {
         "lower": 1.2,
         "upper": 2.2,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1386,8 +1386,8 @@
       "uncertainty": {
         "lower": 4.6,
         "upper": 8.8,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -1431,8 +1431,8 @@
       "uncertainty": {
         "lower": 4.3,
         "upper": 6.1,
-        "method": "monte_carlo",
-        "interval": "68% (16th-84th percentile)",
+        "method": "mcmc",
+        "interval": "68% (16th-84th percentile of retained MCMC samples)",
         "complete": true,
         "excluded_inputs": [],
         "systematic": []
@@ -2611,7 +2611,7 @@
     },
     {
       "id": "fit_covariance_gaussian",
-      "text": "Transit-fit uncertainties from the linearised covariance at the best fit (Gaussian approximation), sampled with physical bounds enforced."
+      "text": "Transit-fit uncertainties from the linearised covariance at the best fit (Gaussian approximation), sampled by MCMC with physical bounds enforced; not a posterior re-fitted to the light curve."
     },
     {
       "id": "heat_redistribution",
@@ -2806,7 +2806,12 @@
   "config": {
     "bond_albedo": 0.3,
     "heat_redistribution": "full",
-    "mc_samples": 4000,
+    "mcmc_samples": 4000,
+    "mcmc_chains": 16,
+    "mcmc_burn_in": 400,
+    "mcmc_thin": 2,
+    "mcmc_rhat_threshold": 1.05,
+    "mcmc_min_ess": 200,
     "random_seed": 20240601,
     "snr_detection_threshold": 7.1
   },

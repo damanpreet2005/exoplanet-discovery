@@ -6,16 +6,23 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "generate:jwt-key": "node scripts/generate-jwt-key.js"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.2.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
+    "express-rate-limit": "^8.7.1",
+    "jose": "^5.10.0",
+    "mongodb": "^6.21.0",
     "multer": "^2.0.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",
+    "mongodb-memory-server": "^10.4.3",
     "supertest": "^7.0.0"
   }
 }

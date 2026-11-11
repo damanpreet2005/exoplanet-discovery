@@ -1,10 +1,10 @@
 jest.mock("../src/services/mlClient");
 const mlClient = require("../src/services/mlClient");
-const request = require("supertest");
-const { createApp } = require("../src/app");
+const { createAuthedApp, authedAgent } = require("./helpers/authedApp");
 const { MLServiceUnavailableError, MLServiceTimeoutError, UpstreamValidationError } = require("../src/errors");
 
-const app = createApp();
+const app = createAuthedApp();
+const api = authedAgent(app);
 
 const FAKE_PHYSICS_RESPONSE = {
   object_id: "KIC 11904151",
@@ -22,7 +22,7 @@ describe("POST /api/v1/physics-validation", () => {
   test("valid named parameters are forwarded to the ML service", async () => {
     mlClient.forwardPhysicsValidation.mockResolvedValue({ ...FAKE_PHYSICS_RESPONSE });
 
-    const res = await request(app)
+    const res = await api
       .post("/api/v1/physics-validation")
       .send({ koi_period: 9.48, koi_depth: 615.8 });
 
@@ -36,7 +36,7 @@ describe("POST /api/v1/physics-validation", () => {
   });
 
   test("empty body returns 422 without calling the ML service", async () => {
-    const res = await request(app).post("/api/v1/physics-validation").send({});
+    const res = await api.post("/api/v1/physics-validation").send({});
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
     expect(mlClient.forwardPhysicsValidation).not.toHaveBeenCalled();
@@ -44,7 +44,7 @@ describe("POST /api/v1/physics-validation", () => {
 
   test("request ID is generated and echoed back", async () => {
     mlClient.forwardPhysicsValidation.mockResolvedValue({ ...FAKE_PHYSICS_RESPONSE });
-    const res = await request(app)
+    const res = await api
       .post("/api/v1/physics-validation")
       .set("X-Request-Id", "trace-7")
       .send({ koi_period: 9.48 });
@@ -56,14 +56,14 @@ describe("POST /api/v1/physics-validation", () => {
 
   test("ML service unavailable returns 503", async () => {
     mlClient.forwardPhysicsValidation.mockRejectedValue(new MLServiceUnavailableError());
-    const res = await request(app).post("/api/v1/physics-validation").send({ koi_period: 9.48 });
+    const res = await api.post("/api/v1/physics-validation").send({ koi_period: 9.48 });
     expect(res.status).toBe(503);
     expect(res.body.error.code).toBe("ML_SERVICE_UNAVAILABLE");
   });
 
   test("ML service timeout returns 504", async () => {
     mlClient.forwardPhysicsValidation.mockRejectedValue(new MLServiceTimeoutError());
-    const res = await request(app).post("/api/v1/physics-validation").send({ koi_period: 9.48 });
+    const res = await api.post("/api/v1/physics-validation").send({ koi_period: 9.48 });
     expect(res.status).toBe(504);
     expect(res.body.error.code).toBe("ML_SERVICE_TIMEOUT");
   });
@@ -72,7 +72,7 @@ describe("POST /api/v1/physics-validation", () => {
     mlClient.forwardPhysicsValidation.mockRejectedValue(
       new UpstreamValidationError(422, { error: { code: "VALIDATION_ERROR", message: "bad input" } })
     );
-    const res = await request(app).post("/api/v1/physics-validation").send({ koi_period: 9.48 });
+    const res = await api.post("/api/v1/physics-validation").send({ koi_period: 9.48 });
     expect(res.status).toBe(422);
     expect(res.body.error.message).toBe("bad input");
   });

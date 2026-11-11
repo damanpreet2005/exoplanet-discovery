@@ -2,6 +2,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import App from "../src/App";
 
+// The analysis workflow requires a signed-in user; these tests cover the
+// workflow itself, so they run as one (see helpers/signedInAuth.jsx).
+vi.mock("../src/context/AuthContext", () => import("./helpers/signedInAuth.jsx"));
+
 describe("App shell", () => {
   test("renders sidebar navigation and the upload page by default", () => {
     render(<App />);

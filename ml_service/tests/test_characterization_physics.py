@@ -15,7 +15,8 @@ from app.characterization.transit_model import (
     blocked_fraction, central_depth, t14_t23, transit_flux, uniform_disk_blocked_fraction,
 )
 from app.characterization.uncertainty import (
-    analytic_power_law, format_measurement, split_normal, summarize,
+    MCMCSettings, analytic_power_law, format_measurement, overdispersed_init, run_metropolis,
+    split_normal_log_prob, split_normal_widths, standard_normal_log_prob, summarize,
 )
 from app.config import get_settings
 
@@ -231,18 +232,64 @@ def test_transit_flux_out_of_transit_is_unity_and_symmetric():
 
 # ---- uncertainty utilities ---------------------------------------------------
 
-def test_split_normal_reproduces_asymmetric_errors():
-    s = split_normal(10.0, 2.0, 1.0, 200000, np.random.default_rng(0))
-    p16, p50, p84 = np.percentile(s, [16, 50, 84])
+MCMC = MCMCSettings(n_samples=20000, n_chains=16, burn_in=400, thin=2, rhat_threshold=1.05, min_ess=200)
+
+
+def _mcmc(log_prob, center, scale, seed=0, settings=MCMC, transform=None):
+    rng = np.random.default_rng(seed)
+    center, scale = np.atleast_1d(center).astype(float), np.atleast_2d(scale).astype(float)
+    init = overdispersed_init(center, scale, log_prob, settings.n_chains, rng)
+    return run_metropolis(log_prob, init, scale, settings, rng, block="test", parameters=["x"] * center.size,
+                          target="test", transform=transform)
+
+
+def test_mcmc_split_normal_reproduces_asymmetric_errors():
+    s, diag = _mcmc(split_normal_log_prob(10.0, 2.0, 1.0), [10.0], [[1.5]])
+    p16, p50, p84 = np.percentile(s[:, 0], [16, 50, 84])
     # The split normal's mode is the catalogue value; its percentiles span
     # roughly the quoted -1/+2 interval.
-    assert p84 - p16 == pytest.approx(3.0, rel=0.05)
+    assert diag.converged and s.shape == (20000, 1)
+    assert p84 - p16 == pytest.approx(3.0, rel=0.08)
     assert 10.0 < p50 < 11.0
+    assert 0.2 < diag.acceptance_rate < 0.7
 
 
 def test_missing_uncertainty_is_held_fixed():
-    s = split_normal(3.0, None, None, 100, np.random.default_rng(0))
-    assert np.all(s == 3.0)
+    assert split_normal_widths(None, None) is None
+    assert split_normal_widths(0.0, 0.0) is None
+    assert split_normal_widths(None, 0.5) == (0.5, 0.5)
+
+
+def test_mcmc_is_reproducible_with_a_seed():
+    a, _ = _mcmc(standard_normal_log_prob, [0.0], [[1.0]], seed=5)
+    b, _ = _mcmc(standard_normal_log_prob, [0.0], [[1.0]], seed=5)
+    c, _ = _mcmc(standard_normal_log_prob, [0.0], [[1.0]], seed=6)
+    assert np.array_equal(a, b) and not np.array_equal(a, c)
+
+
+def test_mcmc_preserves_correlation_and_respects_support():
+    # Correlated 2-D normal truncated to x0 > 0: every retained draw is inside
+    # the support and the correlation of the untruncated coordinates survives.
+    cov = np.array([[1.0, 0.8], [0.8, 1.0]])
+    prec = np.linalg.inv(cov)
+
+    def log_prob(x):
+        lp = -0.5 * np.einsum("ij,jk,ik->i", x, prec, x)
+        return np.where(x[:, 0] > 0, lp, -np.inf)
+
+    s, diag = _mcmc(log_prob, [0.5, 0.5], np.linalg.cholesky(cov))
+    assert diag.converged
+    assert np.all(s[:, 0] > 0)
+    # Truncation lowers it from 0.8: rho var(x0|x0>0) / sqrt(var(x0|x0>0) var(x1|x0>0)) = 0.63.
+    assert np.corrcoef(s.T)[0, 1] == pytest.approx(0.63, abs=0.06)
+
+
+def test_mcmc_reports_non_convergence():
+    # An ESS threshold equal to the number of retained draws cannot be met by
+    # an autocorrelated random-walk chain, so the block is reported as not converged.
+    settings = MCMCSettings(n_samples=400, n_chains=4, burn_in=100, thin=1, rhat_threshold=1.01, min_ess=400)
+    _, diag = _mcmc(standard_normal_log_prob, [0.0], [[1.0]], settings=settings)
+    assert diag.converged is False and diag.message.startswith("Not converged")
 
 
 def test_analytic_and_monte_carlo_agree_for_power_law():

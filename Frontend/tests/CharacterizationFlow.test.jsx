@@ -1,6 +1,10 @@
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 import App from "../src/App";
+
+// The analysis workflow requires a signed-in user; these tests cover the
+// workflow itself, so they run as one (see helpers/signedInAuth.jsx).
+vi.mock("../src/context/AuthContext", () => import("./helpers/signedInAuth.jsx"));
 // Real output of the ML service's characterization engine for its synthetic
 // Kepler-227 b test light curve (see ml_service/tests/test_planet_characterization.py),
 // not a hand-written mock -- so these tests exercise the actual report shape.

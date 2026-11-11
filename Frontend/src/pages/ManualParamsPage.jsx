@@ -14,7 +14,7 @@ const SUGGESTABLE_CANONICALS = new Set([
 ]);
 
 export default function ManualParamsPage() {
-  const { status, result, finalStatus, finalError, submitCombinedPrediction, acceptExtractedPrediction, reset } = useAnalysis();
+  const { status, result, finalStatus, finalError, submitCombinedPrediction, acceptExtractedPrediction, reset, parameterPreset } = useAnalysis();
   const navigate = useNavigate();
 
   const [schemaState, setSchemaState] = useState({ loading: true, features: [], orderConfigured: false, error: null });
@@ -57,10 +57,24 @@ export default function ManualParamsPage() {
           }
         }
       }
+      // A re-run from Prediction History restores the exact values that run
+      // was submitted with; any that differ from the automatic ones are the
+      // user's own entries, not suggestions.
+      let overridesAutomatic = false;
+      for (const [canonical, value] of Object.entries(parameterPreset || {})) {
+        if (value === null || value === undefined) continue;
+        if (next[canonical] !== String(value)) {
+          if (nowPrefilled.delete(canonical)) overridesAutomatic = true;
+        }
+        next[canonical] = String(value);
+      }
+      // Overridden automatic values would otherwise render as locked rows
+      // labelled with their automatic source; show them as editable inputs.
+      if (overridesAutomatic) setExpertMode(true);
       setPrefilled(nowPrefilled);
       return next;
     });
-  }, [result, schemaState.loading, schemaState.error]);
+  }, [result, schemaState.loading, schemaState.error, parameterPreset]);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,7 +97,7 @@ export default function ManualParamsPage() {
   // prediction as part of the CSV-upload response -- accept it directly
   // rather than re-submitting the same values as a second network call.
   useEffect(() => {
-    if (autoAccepted) return;
+    if (autoAccepted || parameterPreset) return;
     if (result?.ready_for_prediction && result?.prediction && finalStatus === FINAL_STATUS.IDLE) {
       const payload = {};
       for (const [canonical, fv] of Object.entries(result.features || {})) {
@@ -92,7 +106,7 @@ export default function ManualParamsPage() {
       setAutoAccepted(true);
       acceptExtractedPrediction(payload, result.prediction);
     }
-  }, [result, finalStatus, autoAccepted, acceptExtractedPrediction]);
+  }, [result, finalStatus, autoAccepted, acceptExtractedPrediction, parameterPreset]);
 
   useEffect(() => {
     if (finalStatus === FINAL_STATUS.SUCCESS) {
@@ -143,7 +157,7 @@ export default function ManualParamsPage() {
     return null; // redirecting
   }
 
-  if (result.ready_for_prediction && result.prediction) {
+  if (result.ready_for_prediction && result.prediction && !parameterPreset) {
     return (
       <div className="fade-in">
         <div className="panel">
@@ -162,6 +176,12 @@ export default function ManualParamsPage() {
             ? `${schemaState.features.length - missingFeatures.size} of ${schemaState.features.length} model parameters were resolved automatically (from your light curve and/or a catalog lookup) and are locked below. Only the ${missingFeatures.size} field(s) marked "unavailable" need manual entry.`
             : "The final prediction combines your uploaded light curve with these 17 model parameters. A few fields have been pre-filled from your light-curve analysis where possible — review and adjust them, then fill in the rest."}
         </p>
+        {parameterPreset && (
+          <p className="page-subtitle">
+            <Icon name="history" size={16} /> Values restored from your saved run in Prediction History. Review them,
+            then run the model.
+          </p>
+        )}
       </header>
 
       <div className="attached-banner">

@@ -3800,3 +3800,350 @@ summary:focus-visible {
     width: min(150px, 100%);
   }
 }
+
+/* ---------- Accounts: login / sign-up / user dashboard ----------
+   Reuses the existing tokens, panels, inputs (.param-input) and buttons;
+   only layout and form-feedback specifics live here. */
+
+/* Centred in the content area, horizontally and vertically. The min-height
+   subtracts .app-main's top + bottom padding (32px + 64px) so a short form
+   never makes the page scroll. */
+.auth-page {
+  max-width: 520px;
+  margin: 0 auto;
+  min-height: calc(100vh - 96px);
+  min-height: calc(100dvh - 96px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.auth-page .page-header {
+  text-align: center;
+}
+
+.auth-page .page-subtitle {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.auth-card {
+  padding: 22px 24px 20px;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-surface-elevated) 60%, transparent);
+}
+
+.auth-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  border-radius: 9px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.auth-tab:hover {
+  color: var(--color-text-primary);
+}
+
+.auth-tab.active {
+  background: color-mix(in srgb, var(--color-accent-primary) 16%, transparent);
+  color: var(--color-text-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-primary) 45%, transparent);
+}
+
+.auth-tab:focus-visible,
+.auth-switch a:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.param-input.is-invalid {
+  border-color: var(--color-error);
+}
+
+.auth-field-error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--color-error);
+  line-height: 1.4;
+}
+
+.auth-form-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--color-error) 45%, transparent);
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  color: var(--color-text-primary);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.auth-form-error .material-symbols-rounded {
+  color: var(--color-error);
+  flex-shrink: 0;
+}
+
+.auth-checklist {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 0.76rem;
+  color: var(--color-text-secondary);
+}
+
+.auth-checklist li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.auth-checklist li.ok {
+  color: var(--color-success);
+}
+
+.auth-footnote {
+  margin: -4px 0 0;
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.auth-switch {
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.auth-switch a {
+  color: var(--color-accent-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.auth-switch a:hover {
+  text-decoration: underline;
+}
+
+/* Avatars: profile picture or initials fallback. */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+}
+
+.avatar-initials {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-text-primary);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-accent-secondary) 45%, var(--color-surface-elevated)),
+    color-mix(in srgb, var(--color-accent-primary) 45%, var(--color-surface-elevated))
+  );
+}
+
+/* Profile chip at the bottom of the dock. The 28px avatar sits in the same
+   20px icon column as the other links (it overhangs by 4px on each side). */
+.dock-profile {
+  height: 52px;
+  gap: 10px;
+  padding: 0 8px;
+}
+
+.dock-avatar {
+  font-size: 0.7rem;
+}
+
+.dock-profile-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.dock-profile-name,
+.dock-profile-handle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-profile-name {
+  color: var(--color-text-primary);
+}
+
+.dock-profile-handle {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+/* User dashboard */
+.account-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  max-width: 960px;
+}
+
+.account-profile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 28px 20px;
+}
+
+.account-avatar {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent-primary) 18%, transparent);
+}
+
+.account-identity {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.account-name {
+  margin: 0;
+  font-size: 1.2rem;
+  overflow-wrap: anywhere;
+}
+
+.account-username {
+  margin: 4px 0 0;
+  font-size: 0.88rem;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.account-logout:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .account-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .auth-card {
+    padding: 18px 16px;
+  }
+}
+
+/* Narrow screens: the dock becomes a top bar, so the form starts below it
+   rather than being pushed to mid-screen. */
+@media (max-width: 768px) {
+  .auth-page {
+    min-height: 0;
+    justify-content: flex-start;
+  }
+}
+
+/* Prediction history: per-row CSV download failure. */
+.history-row-error {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+/* Prediction history: the parameter values a run's prediction used. */
+.history-params {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.history-params summary {
+  cursor: pointer;
+}
+
+.history-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Prediction history: editable name and run timestamps. */
+.history-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.history-name-text {
+  overflow-wrap: anywhere;
+}
+
+.history-name-edit {
+  padding: 2px 6px;
+}
+
+.history-name-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.history-name-input {
+  min-width: 0;
+  flex: 1 1 140px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.history-run-list {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}

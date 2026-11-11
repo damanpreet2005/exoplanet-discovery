@@ -159,7 +159,14 @@ function FitDiagnostics({ fit }) {
         <div><dt>Reduced χ²</dt><dd>{f(fit.reduced_chi2)}</dd></div>
         <div><dt>Red-noise factor β</dt><dd>{f(fit.beta_red_noise)}</dd></div>
         <div><dt>Noise per point</dt><dd>{fit.noise_per_point_ppm ? `${f(fit.noise_per_point_ppm)} ppm` : "—"}</dd></div>
-        <div><dt>Limb darkening</dt><dd>{fit.limb_darkening ? `u₁ ${fit.limb_darkening.u1}, u₂ ${fit.limb_darkening.u2} (assumed)` : "—"}</dd></div>
+        <div>
+          <dt>Limb darkening</dt>
+          <dd title={fit.limb_darkening?.note || undefined}>
+            {fit.limb_darkening
+              ? `u₁ ${fit.limb_darkening.u1}, u₂ ${fit.limb_darkening.u2} (${fit.limb_darkening.provenance === "exoctk_atlas9" ? "ExoCTK/ATLAS9 table, fixed" : "assumed"})`
+              : "—"}
+          </dd>
+        </div>
       </dl>
       <p className="char-muted">{fit.method}</p>
       {fit.bls_note && <p className="char-muted">{fit.bls_note}</p>}
@@ -291,7 +298,7 @@ function PlanetView({ report }) {
       </Panel>
       <Panel title="Classification" icon="category" className="span-2" testId="char-classifications">
         <p className="char-muted">
-          Each category comes from the engine's documented rules; percentages are the share of Monte Carlo samples
+          Each category comes from the engine's documented rules; percentages are the share of retained MCMC samples
           (propagated uncertainties) that fall in each category. {CLASSIFICATION_DISCLAIMER}
         </p>
         <div className="class-grid">
@@ -425,7 +432,17 @@ function SourcesView({ report }) {
         <dl className="metric-grid">
           <div><dt>Bond albedo (assumed)</dt><dd>{cfg.bond_albedo ?? "—"}</dd></div>
           <div><dt>Heat redistribution</dt><dd>{cfg.heat_redistribution ?? "—"}</dd></div>
-          <div><dt>Monte Carlo samples</dt><dd>{cfg.mc_samples ?? "—"}</dd></div>
+          <div><dt>MCMC retained samples</dt><dd>{cfg.mcmc_samples ?? "—"}</dd></div>
+          <div><dt>MCMC chains · burn-in · thin</dt><dd>{cfg.mcmc_chains !== undefined ? `${cfg.mcmc_chains} · ${cfg.mcmc_burn_in} · ${cfg.mcmc_thin}` : "—"}</dd></div>
+          <div><dt>Convergence (R̂ ≤, ESS ≥)</dt><dd>{cfg.mcmc_rhat_threshold !== undefined ? `${cfg.mcmc_rhat_threshold}, ${cfg.mcmc_min_ess}` : "—"}</dd></div>
+          <div>
+            <dt>Sampler status</dt>
+            <dd>
+              {!report.sampler ? "—"
+                : report.sampler.converged ? `Converged (${report.sampler.n_blocks} blocks)`
+                : `Not converged: ${report.sampler.unconverged_blocks.join(", ")}`}
+            </dd>
+          </div>
           <div><dt>Detection SNR threshold</dt><dd>{cfg.snr_detection_threshold ?? "—"}</dd></div>
           <div><dt>Engine version</dt><dd>{report.engine_version || "—"}</dd></div>
           <div><dt>Generated</dt><dd>{report.generated_at ? new Date(report.generated_at).toLocaleString() : "—"}</dd></div>

@@ -72,14 +72,18 @@ class Uncertainty:
     no uncertainty and was therefore held fixed (the interval then
     *underestimates* the true uncertainty, listed in `excluded_inputs`).
     `systematic` lists effects NOT included in the statistical interval.
+    `converged` is False when the interval comes from MCMC samples of a
+    sampler block that did not pass its convergence checks (see the
+    report's `sampler` section); the interval is then not trustworthy.
     """
     lower: float
     upper: float
-    method: str            # "catalog" | "fit_covariance" | "analytic_first_order" | "monte_carlo" | "manual"
+    method: str            # "catalog" | "fit_covariance" | "analytic_first_order" | "mcmc" | "manual" | "profile_likelihood"
     interval: str = "68% (16th-84th percentile)"
     complete: bool = True
     excluded_inputs: list[str] = field(default_factory=list)
     systematic: list[str] = field(default_factory=list)
+    converged: bool = True
 
 
 @dataclass
@@ -126,7 +130,7 @@ class Classification:
     label: str
     category: str | None
     basis: str
-    probability: float | None = None          # MC fraction of samples in this category, when meaningful
+    probability: float | None = None          # fraction of retained MCMC samples in this category, when meaningful
     probabilities: dict[str, float] | None = None
     caveats: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)

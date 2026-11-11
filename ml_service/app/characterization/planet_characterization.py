@@ -13,14 +13,16 @@ values, all JSON-serialisable), so a client can request a recomputation
 later without re-uploading or re-fitting the light curve.
 
 Data flow
+  catalogue Teff, log g --limb_darkening.py (ExoCTK/ATLAS9 table)--> u1, u2
   light curve --BLS (lightcurve_extraction.py, existing)--> seed ephemeris
-              --transit_fit.py--> fitted geometry + covariance + transit times
+              --transit_fit.py (with u1, u2)--> fitted geometry + covariance + transit times
   Object ID --stellar_catalog_service.py (existing)--> KOI catalogue row(s)
               --build_inputs()--> stellar values with err1/err2, reference KOI values
   inputs + overrides + config --engine.compute_report()--> report
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -31,7 +33,7 @@ import numpy as np
 from app.characterization.engine import (
     SCHEMA_VERSION, CharacterizationConfig, OverrideValidationError, compute_report, normalize_overrides,
 )
-from app.characterization import archive_enrichment
+from app.characterization import archive_enrichment, limb_darkening
 from app.characterization.engine import INGRESS_RESOLUTION_FRACTION
 from app.characterization.transit_fit import FitConfig, fit_transit, stellar_density_profile
 
@@ -109,10 +111,13 @@ def build_inputs(time: np.ndarray, flux: np.ndarray, bls, catalog_resolution=Non
                  fit_config: FitConfig | None = None, archive_lookup: bool = False) -> dict:
     """Runs the transit fit and assembles the JSON-serialisable input
     snapshot. `bls` is the existing lightcurve_extraction.BlsResult."""
+    res = catalog_resolution
+    # Stellar values are shared by every KOI on the star, so the period hint
+    # here does not affect them; the catalogue is re-read below with the fitted period.
+    fit_config = _with_stellar_limb_darkening(fit_config, _catalog_inputs(res, bls.period_days)["stellar"])
     fit = fit_transit(time, flux, bls.period_days, bls.transit_epoch, bls.duration_hours / 24.0,
                       bls.depth_fraction, bls.snr, fit_config)
     period_hint = fit.params.get("period") if fit.status == "fitted" else bls.period_days
-    res = catalog_resolution
     catalog = _catalog_inputs(res, period_hint)
     fit = _maybe_refit_from_catalog(time, flux, fit, catalog, fit_config)
     fit = _refit_with_stellar_density(time, flux, fit, catalog, fit_config)
@@ -165,6 +170,29 @@ def catalog_stellar_density(catalog: dict) -> dict | None:
     rho = 3 * g / (4 * math.pi * 6.67430e-8 * r_cm)
     sigma_ln = math.hypot(math.log(10) * s_logg, s_rad / rad["value"])
     return {"value": rho, "sigma": rho * sigma_ln, "source": "catalogue log g and stellar radius (koi_slogg, koi_srad)"}
+
+
+def _with_stellar_limb_darkening(fit_config: FitConfig | None, stellar: dict) -> FitConfig:
+    """The fit configuration with the host star's Kepler-band limb darkening
+    from the ExoCTK/ATLAS9 table, at the catalogue Teff and log g and solar
+    [Fe/H] (the catalogue has no metallicity). Keeps the fixed default, with
+    the reason recorded, when the star is unknown or outside the table."""
+    cfg = fit_config or FitConfig()
+    if not cfg.stellar_limb_darkening:
+        return cfg
+    teff = (stellar.get("stellar_teff") or {}).get("value")
+    logg = (stellar.get("stellar_logg") or {}).get("value")
+    ld = limb_darkening.kepler_quadratic(teff, logg, 0.0)
+    if ld is None:
+        why = ("the catalogue has no Teff and log g for this star" if teff is None or logg is None else
+               f"Teff = {teff:.0f} K, log g = {logg:.2f} is outside the {limb_darkening.SOURCE} table "
+               "(3500-8750 K, log g 3.0-5.0)")
+        return dataclasses.replace(cfg, ld_note=f"{cfg.ld_note} Used because {why}.")
+    return dataclasses.replace(
+        cfg, u1=ld["u1"], u2=ld["u2"], ld_provenance="exoctk_atlas9",
+        ld_note=(f"Interpolated from the {limb_darkening.SOURCE} table at the catalogue Teff = {teff:.0f} K and "
+                 f"log g = {logg:.2f}, assuming solar [Fe/H] (the catalogue lists no metallicity). Held fixed in "
+                 "the fit, not fitted; later stellar overrides do not change it (no refit)."))
 
 
 def _refit_with_stellar_density(time, flux, fit, catalog: dict, fit_config: FitConfig | None):
