@@ -66,8 +66,10 @@ class CharacterizationConfig:
     # iterations per chain, keeping every mcmc_thin-th draw.
     mcmc_samples: int = 4000
     mcmc_chains: int = 16
-    mcmc_burn_in: int = 400
-    mcmc_thin: int = 2
+    # 1000 / 4: the 5-D transit-fit block needs this to pass split-R-hat
+    # <= 1.05 reliably (at 400 / 2 it failed for most seeds, R-hat ~1.06).
+    mcmc_burn_in: int = 1000
+    mcmc_thin: int = 4
     mcmc_rhat_threshold: float = 1.05
     mcmc_min_ess: int = 200
     random_seed: int = 20240601
